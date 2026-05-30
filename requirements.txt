@@ -1,0 +1,16 @@
+fastapi==0.118.0
+uvicorn[standard]==0.37.0
+
+httpx==0.28.1
+motor==3.7.1
+
+pydantic==2.11.7
+pydantic-settings==2.10.1
+
+python-dotenv==1.1.1
+
+google-cloud-tasks==2.19.3
+google-cloud-aiplatform>=1.114.0
+
+google-genai>=1.28.0
+google-adk>=1.5.0
