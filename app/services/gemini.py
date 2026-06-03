@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 _MODELS = {
-    "flash": "gemini-2.0-flash",
-    "pro": "gemini-2.0-pro",
+    "flash": "gemini-3.1-flash-lite",
+    "pro": "gemini-3.5-flash",
 }
 
 
