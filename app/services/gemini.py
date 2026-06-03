@@ -1,16 +1,16 @@
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from app.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
 
-genai.configure(api_key=settings.GEMINI_API_KEY)
+client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
-# Flash: fast, efficient — used for analysis and scoring
-_flash = genai.GenerativeModel("gemini-2.0-flash")
-
-# Pro: higher quality — used for documentation writing
-_pro   = genai.GenerativeModel("gemini-2.0-pro")
+_MODELS = {
+    "flash": "gemini-2.0-flash",
+    "pro": "gemini-2.0-pro",
+}
 
 
 async def call_gemini(
@@ -31,15 +31,14 @@ async def call_gemini(
       0.15 → slightly creative  (good for doc writing while staying accurate)
       0.4+ → more creative      (not recommended for Synkron tasks)
     """
-    gen_model = _flash if model == "flash" else _pro
-    config = genai.GenerationConfig(
-        temperature=temperature,
-        max_output_tokens=max_tokens
-    )
     try:
-        response = await gen_model.generate_content_async(
-            prompt,
-            generation_config=config
+        response = await client.aio.models.generate_content(
+            model=_MODELS[model],
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            ),
         )
         return response.text.strip()
     except Exception as e:
