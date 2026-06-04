@@ -11,9 +11,9 @@ import time, logging, uuid
 logger = logging.getLogger(__name__)
 
 
-async def run_pipeline(commit_sha: str, repo_id: int, payload: dict) -> dict:
+async def run_pipeline(before_sha: str, after_sha: str, repo_id: int, payload: dict) -> dict:
     db  = get_db()
-    run = PipelineRun(repo_id=repo_id, commit_sha=commit_sha)
+    run = PipelineRun(repo_id=repo_id, commit_sha=after_sha)
     await db.pipeline_runs.insert_one(run.dict())
     t0  = time.time()
 
@@ -22,12 +22,13 @@ async def run_pipeline(commit_sha: str, repo_id: int, payload: dict) -> dict:
             # ── ADK local runner path (real MCP, Gemini API, no Vertex AI cost) ──
             result = await run_agent(
                 session_id=run.run_id,
-                commit_sha=commit_sha,
+                before_sha=before_sha,
+                after_sha=after_sha,
                 repo_id=repo_id,
             )
         else:
             # ── Direct 4-agent REST pipeline (default) ────────────────────────
-            result = await _run_direct_agents(run.run_id, commit_sha, repo_id)
+            result = await _run_direct_agents(run.run_id, after_sha, repo_id)
 
         duration = time.time() - t0
 
