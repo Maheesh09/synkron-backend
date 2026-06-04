@@ -86,19 +86,15 @@ def _build_agent() -> LlmAgent:
     )
 
 
-# ── Local ADK Runner (Gemini API — no Vertex AI cost) ─────────────────────
+# ── Hybrid Runner (Local ADK or Remote Vertex AI) ─────────────────────────
 async def run_agent(session_id: str, before_sha: str, after_sha: str, repo_id: int) -> dict:
     """
-    Run the Synkron ADK agent locally using the Gemini API (zero Vertex AI cost).
+    Run the Synkron agent. Automatically switches between local execution
+    (free, via Gemini API) and remote execution (Vertex AI Agent Engine)
+    based on environment configuration.
 
-    The agent uses the real @zereight/mcp-gitlab MCP server over stdio, so every
-    GitLab operation (read diff, list files, commit, open MR) goes through the
-    Model Context Protocol.
-
-    Required in .env:
-      GOOGLE_API_KEY=<from https://aistudio.google.com>
-      GOOGLE_GENAI_USE_VERTEXAI=FALSE
-      USE_AGENT_BUILDER=true
+    If AGENT_ENGINE_RESOURCE is set in .env, it queries the Vertex AI deployment.
+    Otherwise, it runs the ADK agent locally in-process.
 
     Args:
         session_id:  Unique ID for this pipeline run (for tracing).
@@ -109,28 +105,6 @@ async def run_agent(session_id: str, before_sha: str, after_sha: str, repo_id: i
     Returns:
         Dict with 'mr_url', 'mr_id', 'status', and 'events'.
     """
-    # Ensure ADK reads Gemini API key from environment (not Vertex AI).
-    # If GOOGLE_API_KEY isn't explicitly set, fallback to GEMINI_API_KEY.
-    api_key = settings.GOOGLE_API_KEY or settings.GEMINI_API_KEY
-    if api_key:
-        os.environ.setdefault("GOOGLE_API_KEY", api_key)
-    os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "FALSE")
-
-    agent = _build_agent()
-    session_service = InMemorySessionService()
-    runner = Runner(
-        agent=agent,
-        app_name="synkron",
-        session_service=session_service,
-    )
-
-    # Create a session for this pipeline run
-    await session_service.create_session(
-        app_name="synkron",
-        user_id="synkron-system",
-        session_id=session_id,
-    )
-
     message_text = (
         f"Process changes for GitLab project ID {repo_id}. "
         f"The diff is between before_sha: '{before_sha}' and after_sha: '{after_sha}'. "
@@ -141,33 +115,33 @@ async def run_agent(session_id: str, before_sha: str, after_sha: str, repo_id: i
         f'{{"action": "skipped", "reason": "no doc-relevant changes"}}'
     )
 
-    new_message = types.Content(
-        role="user",
-        parts=[types.Part(text=message_text)],
-    )
-
     result = {"events": [], "mr_url": None, "mr_id": None, "status": "running"}
 
-    async for event in runner.run_async(
-        user_id="synkron-system",
-        session_id=session_id,
-        new_message=new_message,
-    ):
-        event_str = str(event)
-        result["events"].append(event_str[:800])   # cap stored size
-
-        # Extract MR URL + iid from the MCP tool response
+    # 1. Vertex AI Agent Engine Path (Remote Execution)
+    if settings.AGENT_ENGINE_RESOURCE:
+        logger.info(f"[{session_id}] Executing on Vertex AI Agent Engine: {settings.AGENT_ENGINE_RESOURCE}")
+        vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.GCP_REGION)
+        
+        # Connect to the deployed reasoning engine
+        remote_agent = agent_engines.get(settings.AGENT_ENGINE_RESOURCE)
+        
+        # Query the remote agent
+        response = remote_agent.query(
+            session_id=session_id,
+            input=message_text
+        )
+        
+        # The Reasoning Engine SDK returns a single response string, not a stream
+        event_str = str(response)
+        result["events"].append(event_str[:800])
+        
+        # Parse for MR URLs and IDs as usual
         if "gitlab.com" in event_str and "merge_requests" in event_str:
-            # URL pattern: https://gitlab.com/group/repo/-/merge_requests/42
-            url_match = re.search(
-                r'https://gitlab\.com/[^\s"\'<>]+/-/merge_requests/(\d+)',
-                event_str
-            )
-            if url_match and not result["mr_url"]:
+            url_match = re.search(r'https://gitlab\.com/[^\s"\'<>]+/-/merge_requests/(\d+)', event_str)
+            if url_match:
                 result["mr_url"] = url_match.group(0)
                 result["mr_id"] = int(url_match.group(1))
 
-        # Also catch the iid field directly from MCP tool JSON response
         if not result["mr_id"] and '"iid"' in event_str:
             iid_match = re.search(r'"iid"\s*:\s*(\d+)', event_str)
             if iid_match:
@@ -175,6 +149,56 @@ async def run_agent(session_id: str, before_sha: str, after_sha: str, repo_id: i
 
         if "skipped" in event_str.lower() or "no doc-relevant" in event_str.lower():
             result["status"] = "skipped"
+            
+    # 2. Local ADK Path (Zero Vertex AI cost)
+    else:
+        logger.info(f"[{session_id}] Executing via Local ADK Runner (Gemini API)")
+        
+        api_key = settings.GOOGLE_API_KEY or settings.GEMINI_API_KEY
+        if api_key:
+            os.environ.setdefault("GOOGLE_API_KEY", api_key)
+        os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "FALSE")
+
+        agent = _build_agent()
+        session_service = InMemorySessionService()
+        runner = Runner(
+            agent=agent,
+            app_name="synkron",
+            session_service=session_service,
+        )
+
+        await session_service.create_session(
+            app_name="synkron",
+            user_id="synkron-system",
+            session_id=session_id,
+        )
+
+        new_message = types.Content(
+            role="user",
+            parts=[types.Part(text=message_text)],
+        )
+
+        async for event in runner.run_async(
+            user_id="synkron-system",
+            session_id=session_id,
+            new_message=new_message,
+        ):
+            event_str = str(event)
+            result["events"].append(event_str[:800])
+
+            if "gitlab.com" in event_str and "merge_requests" in event_str:
+                url_match = re.search(r'https://gitlab\.com/[^\s"\'<>]+/-/merge_requests/(\d+)', event_str)
+                if url_match and not result["mr_url"]:
+                    result["mr_url"] = url_match.group(0)
+                    result["mr_id"] = int(url_match.group(1))
+
+            if not result["mr_id"] and '"iid"' in event_str:
+                iid_match = re.search(r'"iid"\s*:\s*(\d+)', event_str)
+                if iid_match:
+                    result["mr_id"] = int(iid_match.group(1))
+
+            if "skipped" in event_str.lower() or "no doc-relevant" in event_str.lower():
+                result["status"] = "skipped"
 
     if result["mr_url"]:
         result["status"] = "completed"
