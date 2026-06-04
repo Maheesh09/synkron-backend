@@ -14,7 +14,25 @@
 $BASE            = "http://localhost:8080"
 $WEBHOOK_SECRET  = "your_secret_here"   # ← must match GITLAB_WEBHOOK_SECRET in .env
 $GITLAB_PROJECT_ID = 82768623           # ← your GitLab project numeric ID
-$REAL_COMMIT_SHA   = "PASTE_A_REAL_COMMIT_SHA_HERE"  # ← any valid commit SHA
+$REAL_COMMIT_SHA   = "PASTE_A_REAL_COMMIT_SHA_HERE"  # ← any valid commit SHA from your GitLab project
+
+# ---------------------------------------------------------------------------
+# Guard: catch unfilled placeholders before any network call
+if ($REAL_COMMIT_SHA -eq "PASTE_A_REAL_COMMIT_SHA_HERE") {
+    Write-Host ""
+    Write-Host "  ERROR: You must set a real commit SHA before running this script." -ForegroundColor Red
+    Write-Host "  1. Open scripts/test_03_webhook.ps1" -ForegroundColor Yellow
+    Write-Host "  2. Replace the PASTE_A_REAL_COMMIT_SHA_HERE value on line 17" -ForegroundColor Yellow
+    Write-Host "  3. Go to your GitLab project -> Repository -> Commits -> copy any full SHA" -ForegroundColor Yellow
+    Write-Host ""
+    exit 1
+}
+if ($WEBHOOK_SECRET -eq "your_secret_here") {
+    Write-Host ""
+    Write-Host "  ERROR: Set WEBHOOK_SECRET to match GITLAB_WEBHOOK_SECRET in your .env file." -ForegroundColor Red
+    Write-Host ""
+    exit 1
+}
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host " Synkron — Test 03: Webhook (Push)" -ForegroundColor Cyan

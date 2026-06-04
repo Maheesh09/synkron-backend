@@ -7,12 +7,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Initialize Vertex AI
-vertexai.init(
-    project=settings.GOOGLE_CLOUD_PROJECT,
-    location=settings.GCP_REGION
-)
-
 
 # Agent System Prompt (Instruction)
 SYNKRON_INSTRUCTION = """
@@ -61,14 +55,15 @@ and update only the documentation files that need to reflect that change.
 """
 
 
-# ── Build the Synkron ADK Agent ────────────────────────────────────────────
-synkron_agent = LlmAgent(
-    name="synkron_doc_agent",
-    model="gemini-2.0-flash",     # Flash for speed; uses Pro for writing via sub-calls
-    description="Autonomous documentation maintenance agent that keeps GitLab docs in sync with code",
-    instruction=SYNKRON_INSTRUCTION,
-    tools=GITLAB_MCP_TOOLS,
-)
+def _build_agent() -> LlmAgent:
+    """Construct the ADK agent. Called lazily so no Vertex AI SDK calls happen at import."""
+    return LlmAgent(
+        name="synkron_doc_agent",
+        model="gemini-2.0-flash",     # Flash for speed; uses Pro for writing via sub-calls
+        description="Autonomous documentation maintenance agent that keeps GitLab docs in sync with code",
+        instruction=SYNKRON_INSTRUCTION,
+        tools=GITLAB_MCP_TOOLS,
+    )
 
 
 # ── Deploy to Vertex AI Agent Engine ──────────────────────────────────────
@@ -78,12 +73,16 @@ def deploy_to_agent_engine() -> str:
     Run this once to get the resource name, then store it in .env as
     AGENT_ENGINE_RESOURCE.
 
+    Requires GOOGLE_CLOUD_PROJECT and GCP_REGION to be set in your .env.
+
     Returns:
         The full resource name string for the deployed agent.
     """
+    vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.GCP_REGION)
+    agent = _build_agent()
     logger.info("Deploying Synkron agent to Vertex AI Agent Engine...")
     remote_agent = agent_engines.create(
-        synkron_agent,
+        agent,
         requirements=[
             "google-adk>=0.4.0",
             "httpx>=0.27.0",
@@ -101,7 +100,10 @@ def deploy_to_agent_engine() -> str:
 # ── Query the deployed agent ───────────────────────────────────────────────
 async def run_agent(session_id: str, commit_sha: str, repo_id: int) -> dict:
     """
-    Run the deployed Synkron agent for a commit.
+    Run the deployed Synkron agent for a commit via Vertex AI Agent Engine.
+
+    Requires GOOGLE_CLOUD_PROJECT, GCP_REGION, and AGENT_ENGINE_RESOURCE
+    to be set in your .env. See scripts/deploy_agent.py to deploy first.
 
     Args:
         session_id: Unique ID for this pipeline run (for tracing).
@@ -111,6 +113,7 @@ async def run_agent(session_id: str, commit_sha: str, repo_id: int) -> dict:
     Returns:
         Dict with 'mr_url' (or None if skipped) and 'events' list.
     """
+    vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT, location=settings.GCP_REGION)
     remote_app = agent_engines.get(settings.AGENT_ENGINE_RESOURCE)
 
     # Create a session for this run
