@@ -15,7 +15,21 @@
 $BASE            = "http://localhost:8080"
 $INTERNAL_SECRET = "synkron-local-dev-secret-change-in-prod"  # INTERNAL_SECRET from .env
 $GITLAB_PROJECT_ID = 82768623                # ← your GitLab project numeric ID
-$COMMIT_SHA        = "PASTE_A_REAL_COMMIT_SHA_HERE"  # ← full 40-char SHA
+$COMMIT_SHA        = "PASTE_A_REAL_COMMIT_SHA_HERE"  # ← full 40-char SHA from your GitLab project
+
+# ---------------------------------------------------------------------------
+# Guard: catch unfilled placeholders before hitting the pipeline
+if ($COMMIT_SHA -eq "PASTE_A_REAL_COMMIT_SHA_HERE") {
+    Write-Host ""
+    Write-Host "  ERROR: You must set a real commit SHA before running this script." -ForegroundColor Red
+    Write-Host "  1. Open scripts/test_04_pipeline.ps1" -ForegroundColor Yellow
+    Write-Host "  2. Replace the PASTE_A_REAL_COMMIT_SHA_HERE value on line 18" -ForegroundColor Yellow
+    Write-Host "  3. Go to your GitLab project -> Repository -> Commits -> copy any full SHA" -ForegroundColor Yellow
+    Write-Host "  Tip: Use a commit that added/changed a feature (not just tests or lock files)" -ForegroundColor Yellow
+    Write-Host "       so the pipeline has something doc-worthy to process." -ForegroundColor Yellow
+    Write-Host ""
+    exit 1
+}
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host " Synkron — Test 04: Run Full Pipeline" -ForegroundColor Cyan
