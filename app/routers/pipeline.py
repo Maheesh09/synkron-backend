@@ -11,7 +11,8 @@ async def run_pipeline_endpoint(payload: dict, x_internal_token: str = Header(No
     if x_internal_token != settings.INTERNAL_SECRET:
         raise HTTPException(status_code=403)
     result = await run_pipeline(
-        commit_sha=payload["after"],
+        before_sha=payload["before"],
+        after_sha=payload["after"],
         repo_id=payload["project"]["id"],
         payload=payload
     )

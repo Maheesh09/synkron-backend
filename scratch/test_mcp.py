@@ -22,7 +22,7 @@ async def test_mcp():
             tools=[toolset]
         )
         print("LlmAgent instantiated with MCPToolset.")
-        print("ADK is successfully configured to spawn 'npx @gitlab-org/gitlab-mcp' when this agent is invoked.")
+        print("ADK is successfully configured to spawn 'npx @zereight/mcp-gitlab' when this agent is invoked.")
         print("Note: The MCP subprocess is launched lazily by ADK when the agent attempts to use tools.")
         
     except Exception as e:

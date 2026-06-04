@@ -12,13 +12,20 @@ Documentation rots. Code changes daily, docs get fixed whenever someone finally 
 
 Synkron removes the separate chore. Keeping docs current becomes a side effect of pushing code, the same way a test suite runs in CI without anyone clicking a button.
 
+## Two execution paths
+
+Synkron can run the pipeline in two distinct ways, toggled via environment variables:
+
+1. **Direct REST Pipeline (Default)**: A lightweight, 4-agent sequential workflow that connects directly to GitLab via REST. It includes a feedback loop that learns from human edits to MRs over time.
+2. **MCP ADK Runner Path**: A single Google ADK `LlmAgent` running locally against the Gemini API. Instead of REST, it launches the official `@zereight/mcp-gitlab` server as a local subprocess and executes all GitLab operations through the Model Context Protocol (MCP).
+
 ## How it works, start to finish
 
-There is one way in and four workers behind it.
+There is one way in, regardless of which execution path is active.
 
 A developer pushes code as they normally would. GitLab sends a push event to Synkron's webhook. Synkron inspects the event, ignores anything not worth acting on (empty pushes, and crucially its own bot commits so it never reacts to itself), and drops the real work onto a background queue. The web request returns right away, so GitLab is never left waiting.
 
-The queued job runs the pipeline. Four agents run in order, and any of them is allowed to end the run early when there is nothing useful left to do.
+The queued job runs the pipeline. If the default Direct REST pipeline is used, four agents run in order:
 
 1. Code Analyzer. Reads the commit diff, discards noise such as lock files and test fixtures, and asks the model to describe what actually changed in plain language. It returns a short summary plus a handful of keywords a developer would search for in the docs. If the change is a pure refactor with no behavior difference, it returns nothing and the run stops here.
 
@@ -27,6 +34,8 @@ The queued job runs the pipeline. Four agents run in order, and any of them is a
 3. Doc Writer. For each affected document, it rewrites only the sections that describe the changed behavior. It is instructed to leave everything else untouched: the same headings, the same tone, the same structure. The aim is a change a careful human would have made, not a wholesale rewrite of the file.
 
 4. PR Creator. Creates a branch named after the commit, commits the updated docs under the synkron-bot author, and opens a merge request with a clear title and description. Then it stops and waits for a person to review.
+
+*(If the MCP ADK Runner path is active, a single agent handles all these steps via MCP tool calls).*
 
 Every run is written to the database with its status, how long it took, and the merge request it produced, so you can always see what Synkron has been doing.
 
@@ -105,11 +114,13 @@ GET /api/repos lists the repositories Synkron is aware of.
 
 Python 3.11 or newer.
 
+Node.js and npm (required for the MCP path to spawn the GitLab MCP server). Once installed, run `npm install -g @zereight/mcp-gitlab` so the server starts instantly.
+
 A MongoDB database. The free Atlas tier is enough to begin with.
 
 A GitLab personal access token with the api scope, so Synkron can read commits and open merge requests.
 
-A Gemini API key.
+A Gemini API key (or Google AI Studio key).
 
 ## Running it on your machine
 
@@ -164,7 +175,13 @@ GITLAB_PAT is the personal access token used for every GitLab call. It needs the
 
 GITLAB_WEBHOOK_SECRET is a shared secret. GitLab sends it on each webhook call, and Synkron rejects any call where it does not match.
 
-GEMINI_API_KEY is the key for the Gemini models used by the analysis and writing agents.
+GEMINI_API_KEY is the key for the Gemini models used by the default direct REST pipeline.
+
+USE_AGENT_BUILDER switches Synkron to use the MCP ADK Runner path when set to `true`.
+
+GOOGLE_API_KEY is used by the MCP ADK Runner path. It defaults to GEMINI_API_KEY if left blank.
+
+GOOGLE_GENAI_USE_VERTEXAI should be set to `FALSE` to ensure the ADK Runner uses the free-tier Gemini API rather than billing a Vertex AI project.
 
 MONGODB_URI is the connection string for your MongoDB instance.
 
@@ -176,7 +193,7 @@ SERVICE_URL is the public base address of the deployed service. The queue uses i
 
 GOOGLE_CLOUD_PROJECT and GCP_REGION are your Google Cloud project and region, used when running on Cloud Run with Cloud Tasks.
 
-AGENT_ENGINE_RESOURCE is optional. Set it only if you run the hosted agent path instead of the direct agents.
+AGENT_ENGINE_RESOURCE is optional. Set it only if you deployed the agent to Vertex AI Reasoning Engine using the provided scripts.
 
 LOCAL_DEV is for local work only. Set it to true to bypass the cloud queue while developing, and never set it in production.
 

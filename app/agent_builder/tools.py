@@ -11,7 +11,7 @@ that code is completely untouched.
 
 Prerequisites for the Vertex AI path:
   - Node.js / npx must be installed on the machine running the agent.
-  - The first run auto-downloads @gitlab-org/gitlab-mcp via npx (cached after that).
+  - The first run auto-downloads @zereight/mcp-gitlab via npx (cached after that).
   - GITLAB_PAT must be set in .env with the `api` scope.
 """
 from google.adk.tools.mcp_tool import MCPToolset, StdioConnectionParams
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 def create_gitlab_mcp_toolset() -> MCPToolset:
     """
-    Build an ADK MCPToolset that launches the official GitLab MCP server
+    Build an ADK MCPToolset that launches the @zereight/mcp-gitlab MCP server
     as a subprocess via npx and communicates over stdio.
 
     The toolset exposes GitLab capabilities (read files, list trees, create
@@ -34,7 +34,7 @@ def create_gitlab_mcp_toolset() -> MCPToolset:
     Returns:
         MCPToolset instance ready to be passed to LlmAgent(tools=[...]).
     """
-    logger.info("Creating GitLab MCPToolset (stdio → npx @gitlab-org/gitlab-mcp)")
+    logger.info("Creating GitLab MCPToolset (stdio → npx @zereight/mcp-gitlab)")
     return MCPToolset(
         connection_params=StdioConnectionParams(
             server_params=StdioServerParameters(
