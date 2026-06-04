@@ -1,7 +1,3 @@
-# Create scripts directory
-mkdir -p scripts
-
-cat > scripts/deploy_agent.py << 'EOF'
 """
 Run once to deploy the Synkron ADK agent to Vertex AI Agent Engine.
 """
@@ -18,6 +14,5 @@ if __name__ == "__main__":
     print(" This takes 3–8 minutes. Do not interrupt.\n")
     resource = deploy_to_agent_engine()
     print(f"\n Done!")
-    print(f"\ Copy this into your .env file:")
+    print(f" Copy this into your .env file:")
     print(f"   AGENT_ENGINE_RESOURCE={resource}")
-EOF
