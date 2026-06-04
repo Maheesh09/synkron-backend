@@ -1,6 +1,11 @@
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from app.config import settings
 import logging
+import dns.resolver
+
+# Use Google's public DNS to resolve SRV records and avoid local router DNS timeouts
+dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+dns.resolver.default_resolver.nameservers = ['8.8.8.8', '1.1.1.1']
 
 logger = logging.getLogger(__name__)
 

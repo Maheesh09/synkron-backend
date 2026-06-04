@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     # Internal
     SERVICE_URL: str
     INTERNAL_SECRET: str
+    LOCAL_DEV: bool = False
 
     # Gemini
     GEMINI_API_KEY: str
