@@ -41,13 +41,17 @@ async def call_gemini(
       0.4+ → more creative      (not recommended for Synkron tasks)
     """
     try:
-        response = await client.aio.models.generate_content(
-            model=_MODELS[model],
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens,
+        import asyncio
+        response = await asyncio.wait_for(
+            client.aio.models.generate_content(
+                model=_MODELS[model],
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                ),
             ),
+            timeout=45.0
         )
         return response.text.strip()
     except Exception as e:

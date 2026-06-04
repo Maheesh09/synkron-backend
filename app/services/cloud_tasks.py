@@ -3,7 +3,6 @@ import json, logging, os
 import httpx
 
 logger = logging.getLogger(__name__)
-LOCAL_DEV = os.getenv("LOCAL_DEV", "").lower() in ("1", "true", "yes")
 
 _client = None
 def _get_client():
@@ -44,11 +43,26 @@ def _create_task(endpoint: str, payload: dict) -> str:
     return client.create_task(parent=queue_path, task=task).name
 
 async def enqueue_pipeline(payload: dict):
-    if LOCAL_DEV:
-        return await _dispatch_local("run-pipeline", payload)
+    if settings.LOCAL_DEV:
+        import asyncio
+        from app.agents.orchestrator import run_pipeline
+        logger.info("[LOCAL] Executing pipeline directly in background task")
+        asyncio.create_task(
+            run_pipeline(
+                before_sha=payload.get("before"),
+                after_sha=payload.get("after"),
+                repo_id=payload.get("project", {}).get("id"),
+                payload=payload
+            )
+        )
+        return
     logger.info(f"Pipeline task created: {_create_task('run-pipeline', payload)}")
 
 async def enqueue_feedback(payload: dict):
-    if LOCAL_DEV:
-        return await _dispatch_local("process-feedback", payload)
+    if settings.LOCAL_DEV:
+        import asyncio
+        from app.services.feedback import process_feedback
+        logger.info("[LOCAL] Executing feedback process directly in background task")
+        asyncio.create_task(process_feedback(payload))
+        return
     logger.info(f"Feedback task created: {_create_task('process-feedback', payload)}")
