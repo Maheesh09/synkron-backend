@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     GITLAB_WEBHOOK_SECRET: str
     GITLAB_PAT: str
 
-    # Google Cloud
-    GOOGLE_CLOUD_PROJECT: str
+    # Google Cloud (only required when using Cloud Tasks or Vertex AI agent path)
+    GOOGLE_CLOUD_PROJECT: str = ""
     GCP_REGION: str = "asia-south1"
 
     # MongoDB
