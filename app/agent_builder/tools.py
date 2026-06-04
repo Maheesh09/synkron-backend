@@ -1,135 +1,51 @@
-from google.adk.tools import FunctionTool
-from app.services.gitlab_mcp import GitLabMCP
-from typing import List, Dict, Optional
+"""
+tools.py — Vertex AI Agent Builder path tools
+==============================================
+Provides a real GitLab MCP toolset for the Vertex AI / Agent Engine path.
+The agent connects to GitLab via the official GitLab MCP server running as a
+local subprocess (stdio transport), which speaks the Model Context Protocol.
+
+This file is ONLY used by app/agent_builder/agent.py (the Vertex AI path).
+The direct 4-agent pipeline uses app/services/gitlab_mcp.py (REST) instead —
+that code is completely untouched.
+
+Prerequisites for the Vertex AI path:
+  - Node.js / npx must be installed on the machine running the agent.
+  - The first run auto-downloads @gitlab-org/gitlab-mcp via npx (cached after that).
+  - GITLAB_PAT must be set in .env with the `api` scope.
+"""
+from google.adk.tools.mcp_tool import MCPToolset, StdioConnectionParams
+from mcp.client.stdio import StdioServerParameters
+from app.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Shared MCP client instance
-_mcp = GitLabMCP()
 
-
-
-# Each function below is wrapped into an ADK FunctionTool.
-# The docstring becomes the tool's description visible to the Gemini model.
-
-
-
-async def get_commit_diff(project_id: int, sha: str) -> str:
+def create_gitlab_mcp_toolset() -> MCPToolset:
     """
-    Retrieves the complete unified diff for a given commit SHA.
-    Use this first to understand what code changed in the push.
+    Build an ADK MCPToolset that launches the official GitLab MCP server
+    as a subprocess via npx and communicates over stdio.
 
-    Args:
-        project_id: The GitLab project ID (integer).
-        sha: The full commit SHA to retrieve the diff for.
+    The toolset exposes GitLab capabilities (read files, list trees, create
+    branches, commit files, open merge requests) to the LlmAgent through the
+    MCP protocol — not raw REST calls.
 
     Returns:
-        A string containing the unified diff with all changed files.
+        MCPToolset instance ready to be passed to LlmAgent(tools=[...]).
     """
-    return await _mcp.get_commit_diff(project_id, sha)
-
-
-async def list_repository_tree(project_id: int, ref: str = "main") -> List[Dict]:
-    """
-    Lists all files in the GitLab repository recursively.
-    Use this to find which documentation files exist in the project.
-
-    Args:
-        project_id: The GitLab project ID (integer).
-        ref: Branch or tag to list files from (default: "main").
-
-    Returns:
-        A list of file objects with name, path, and type fields.
-    """
-    return await _mcp.list_repository_tree(project_id, ref)
-
-
-async def get_file_content(project_id: int, file_path: str) -> str:
-    """
-    Reads the current content of a file from the repository.
-    Use this to read documentation files before rewriting them.
-
-    Args:
-        project_id: The GitLab project ID (integer).
-        file_path: Path to the file relative to repo root (e.g., "docs/auth.md").
-
-    Returns:
-        The decoded file content as a string.
-    """
-    return await _mcp.get_file_content(project_id, file_path)
-
-
-async def create_branch(project_id: int, branch_name: str, ref: str = "main") -> Dict:
-    """
-    Creates a new branch in the GitLab repository.
-    Always create a branch before committing documentation changes.
-
-    Args:
-        project_id: The GitLab project ID (integer).
-        branch_name: Name for the new branch (e.g., "synkron/docs-abc123de").
-        ref: Base branch to create from (default: "main").
-
-    Returns:
-        A dict with branch creation status.
-    """
-    await _mcp.create_branch(project_id, branch_name, ref)
-    return {"status": "created", "branch": branch_name}
-
-
-async def commit_file(
-    project_id: int,
-    branch_name: str,
-    file_path: str,
-    content: str,
-    commit_message: str
-) -> Dict:
-    """
-    Commits an updated file to a branch in the GitLab repository.
-    Use after rewriting a documentation file to save the changes.
-
-    Args:
-        project_id: The GitLab project ID (integer).
-        branch_name: The branch to commit to.
-        file_path: Path to the file to update (e.g., "docs/auth.md").
-        content: The complete new file content to commit.
-        commit_message: A descriptive commit message.
-
-    Returns:
-        A dict with commit status and short SHA.
-    """
-    await _mcp.commit_file(project_id, branch_name, file_path, content, commit_message)
-    return {"status": "committed", "path": file_path}
-
-
-async def create_merge_request(
-    project_id: int,
-    source_branch: str,
-    title: str,
-    description: str
-) -> Dict:
-    """
-    Opens a merge request on GitLab from the source branch to main.
-    Call this last, after all documentation files have been committed.
-
-    Args:
-        project_id: The GitLab project ID (integer).
-        source_branch: The branch containing the doc updates.
-        title: MR title. Start with "Docs: " then summarize what changed.
-        description: Detailed markdown description of what was updated and why.
-
-    Returns:
-        A dict with web_url and iid (internal ID) of the created MR.
-    """
-    return await _mcp.create_merge_request(project_id, source_branch, title, description)
-
-
-# ── Register all tools as ADK FunctionTool instances ──────────────────────
-GITLAB_MCP_TOOLS = [
-    FunctionTool(func=get_commit_diff),
-    FunctionTool(func=list_repository_tree),
-    FunctionTool(func=get_file_content),
-    FunctionTool(func=create_branch),
-    FunctionTool(func=commit_file),
-    FunctionTool(func=create_merge_request),
-]
+    logger.info("Creating GitLab MCPToolset (stdio → npx @gitlab-org/gitlab-mcp)")
+    return MCPToolset(
+        connection_params=StdioConnectionParams(
+            server_params=StdioServerParameters(
+                command="npx",
+                args=["-y", "@gitlab-org/gitlab-mcp@latest"],
+                env={
+                    # PAT with `api` scope — same value already in .env
+                    "GITLAB_PERSONAL_ACCESS_TOKEN": settings.GITLAB_PAT,
+                    # Target the public GitLab instance
+                    "GITLAB_API_URL": "https://gitlab.com/api/v4",
+                }
+            )
+        )
+    )

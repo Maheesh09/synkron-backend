@@ -1,7 +1,7 @@
 import vertexai
 from vertexai import agent_engines
 from google.adk.agents import LlmAgent
-from app.agent_builder.tools import GITLAB_MCP_TOOLS
+from app.agent_builder.tools import create_gitlab_mcp_toolset
 from app.config import settings
 import logging
 
@@ -56,13 +56,19 @@ and update only the documentation files that need to reflect that change.
 
 
 def _build_agent() -> LlmAgent:
-    """Construct the ADK agent. Called lazily so no Vertex AI SDK calls happen at import."""
+    """
+    Construct the ADK agent with a real GitLab MCPToolset.
+    Called lazily so no Vertex AI SDK calls happen at import.
+
+    The MCPToolset connects to the official GitLab MCP server via stdio,
+    giving the agent genuine MCP protocol access to GitLab operations.
+    """
     return LlmAgent(
         name="synkron_doc_agent",
-        model="gemini-2.0-flash",     # Flash for speed; uses Pro for writing via sub-calls
+        model="gemini-2.0-flash",
         description="Autonomous documentation maintenance agent that keeps GitLab docs in sync with code",
         instruction=SYNKRON_INSTRUCTION,
-        tools=GITLAB_MCP_TOOLS,
+        tools=[create_gitlab_mcp_toolset()],
     )
 
 
@@ -84,9 +90,10 @@ def deploy_to_agent_engine() -> str:
     remote_agent = agent_engines.create(
         agent,
         requirements=[
-            "google-adk>=0.4.0",
+            "google-adk>=1.5.0",
+            "mcp>=1.0.0",             # MCP Python SDK — required for MCPToolset
             "httpx>=0.27.0",
-            "google-cloud-aiplatform>=1.68.0",
+            "google-cloud-aiplatform>=1.114.0",
             "google-generativeai>=0.8.0",
         ],
         display_name="Synkron Documentation Agent",
