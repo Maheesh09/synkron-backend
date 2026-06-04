@@ -1,5 +1,7 @@
 from google import genai
 from google.genai import types
+from google.genai import errors
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type, before_sleep_log
 from app.config import settings
 import logging
 
@@ -13,6 +15,13 @@ _MODELS = {
 }
 
 
+@retry(
+    wait=wait_exponential(multiplier=2, min=4, max=60),
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception_type((errors.APIError, Exception)),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True
+)
 async def call_gemini(
     prompt: str,
     model: str = "flash",
@@ -20,7 +29,7 @@ async def call_gemini(
     max_tokens: int = 8192
 ) -> str:
     """
-    Unified Gemini call.
+    Unified Gemini call with automatic retry on temporary API errors (like 503 or 429).
 
     model:
       "flash" — Gemini 2.0 Flash  (analysis, scoring, JSON extraction)
@@ -32,13 +41,17 @@ async def call_gemini(
       0.4+ → more creative      (not recommended for Synkron tasks)
     """
     try:
-        response = await client.aio.models.generate_content(
-            model=_MODELS[model],
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens,
+        import asyncio
+        response = await asyncio.wait_for(
+            client.aio.models.generate_content(
+                model=_MODELS[model],
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                ),
             ),
+            timeout=45.0
         )
         return response.text.strip()
     except Exception as e:
