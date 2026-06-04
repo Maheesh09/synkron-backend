@@ -39,7 +39,7 @@ def create_gitlab_mcp_toolset() -> MCPToolset:
         connection_params=StdioConnectionParams(
             server_params=StdioServerParameters(
                 command="npx",
-                args=["-y", "@gitlab-org/gitlab-mcp@latest"],
+                args=["-y", "@zereight/mcp-gitlab"],
                 env={
                     # PAT with `api` scope — same value already in .env
                     "GITLAB_PERSONAL_ACCESS_TOKEN": settings.GITLAB_PAT,
