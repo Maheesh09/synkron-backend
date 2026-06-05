@@ -3,13 +3,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import webhook, pipeline, dashboard
 from app.database import connect_db, disconnect_db
 import logging
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await connect_db()
+    yield
+    await disconnect_db()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 
 app = FastAPI(
     title="Synkron API",
     version="1.0.0",
-    description="AI documentation agent powered by GitLab MCP + Google Cloud Agent Builder + Gemini"
+    description="AI documentation agent powered by GitLab MCP + Google Cloud Agent Builder + Gemini",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -18,16 +27,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def startup():
-    await connect_db()
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    await disconnect_db()
 
 
 # ── Routes ──────────────────────────────────────────────────────────────
