@@ -141,3 +141,21 @@ class GitLabMCP:
                 "labels": "documentation,synkron",
             },
         )
+    async def get_diff_between(self, project_id: int, from_sha: str, to_sha: str) -> str:
+        """Unified-diff string for ALL commits in a push (from..to), via compare API."""
+        data = await self._get(
+            f"/projects/{project_id}/repository/compare",
+            params={"from": from_sha, "to": to_sha},
+        )
+        parts = []
+        for f in data.get("diffs", []):
+            old = f.get("old_path") or f.get("new_path")
+            new = f.get("new_path") or old
+            parts.append(f"diff --git a/{old} b/{new}\n{f.get('diff', '')}")
+        return "\n".join(parts)
+
+    async def get_push_diff(self, project_id: int, before_sha: str, after_sha: str) -> str:
+        """Full diff of a push. Falls back to the single commit on a new branch."""
+        if not before_sha or set(before_sha) == {"0"}:   # zero SHA = new branch / first push
+            return await self.get_commit_diff(project_id, after_sha)
+        return await self.get_diff_between(project_id, before_sha, after_sha)
