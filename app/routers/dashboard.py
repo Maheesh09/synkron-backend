@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from app.database import get_db
 
 router = APIRouter()
@@ -34,3 +34,32 @@ async def get_repositories():
         {}, {"_id": 0}
     ).to_list(length=50)
     return repos
+
+@router.post("/repos/connect")
+async def connect_repo(body: dict):
+    import re
+    from app.services.gitlab_mcp import GitLabMCP
+    from app.config import settings
+
+    gitlab_url = body.get("gitlab_url", "").strip().rstrip("/")
+    # Extract project path from URL
+    match = re.search(r"gitlab\.com/(.+)$", gitlab_url)
+    if not match:
+        raise HTTPException(400, "Provide a full GitLab project URL")
+
+    path = match.group(1)
+    mcp = GitLabMCP()
+
+    try:
+        project = await mcp._get(f"/projects/{path.replace('/', '%2F')}")
+    except Exception as e:
+        raise HTTPException(422, f"Cannot access project: {e}")
+
+    return {
+        "project_id":     project["id"],
+        "name":           project["name_with_namespace"],
+        "default_branch": project.get("default_branch", "main"),
+        "webhook_url":    f"{settings.SERVICE_URL}/webhook/gitlab",
+        "webhook_secret": settings.GITLAB_WEBHOOK_SECRET[:4] + "••••",
+        "status":         "ready"
+    }    
