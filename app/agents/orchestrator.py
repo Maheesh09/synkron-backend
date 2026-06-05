@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models.pipeline_run import PipelineRun
 from app.config import settings
 import time, logging, uuid
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,17 @@ async def run_pipeline(before_sha: str, after_sha: str, repo_id: int, payload: d
     db  = get_db()
     run = PipelineRun(repo_id=repo_id, commit_sha=after_sha)
     await db.pipeline_runs.insert_one(run.dict())
+    project = payload.get("project", {}) or {}
+    await db.repositories.update_one(
+        {"repo_id": repo_id},
+        {"$set": {
+            "repo_id": repo_id,
+            "name":    project.get("name") or project.get("path_with_namespace"),
+            "url":     project.get("web_url"),
+            "last_seen": datetime.utcnow(),
+        }},
+        upsert=True,
+    )
     t0  = time.time()
 
     try:
