@@ -28,6 +28,7 @@ async def connect_db():
             [("repo_id", 1), ("doc_type", 1), ("created_at", -1)]
         )
         await db.repositories.create_index([("repo_id", 1)], unique=True)
+        await db.pipeline_run_details.create_index([("run_id", 1), ("doc_path", 1)])
     except Exception as e:
         logger.error(f"MongoDB connection failed: {e}")
         raise
