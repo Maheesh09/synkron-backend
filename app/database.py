@@ -2,6 +2,17 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from app.config import settings
 import logging
 import dns.resolver
+from pymongo.errors import OperationFailure
+
+
+async def _ensure_index(coll, keys, **opts):
+    try:
+        await coll.create_index(keys, **opts)
+    except OperationFailure as e:
+        if e.code == 86:  # IndexKeySpecsConflict: same name, different options
+            logger.warning(f"Index {keys} already exists with different options — skipping")
+        else:
+            raise
 
 # Use Google's public DNS to resolve SRV records and avoid local router DNS timeouts
 dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
@@ -22,12 +33,12 @@ async def connect_db():
         logger.info("MongoDB connected")
 
         # Create indexes
-        await db.pipeline_runs.create_index([("repo_id", 1), ("created_at", -1)])
-        await db.pipeline_runs.create_index([("mr_id", 1)])
-        await db.correction_patterns.create_index(
-            [("repo_id", 1), ("doc_type", 1), ("created_at", -1)]
-        )
-        await db.repositories.create_index([("repo_id", 1)], unique=True)
+        await _ensure_index(db.pipeline_runs, [("repo_id", 1), ("created_at", -1)])
+        await _ensure_index(db.pipeline_runs, [("mr_id", 1)])
+        await _ensure_index(db.correction_patterns, [("repo_id", 1), ("doc_type", 1), ("created_at", -1)])
+        await _ensure_index(db.repositories, [("repo_id", 1)], unique=True)
+        await _ensure_index(db.pipeline_run_details, [("run_id", 1), ("doc_path", 1)], unique=True)
+        
     except Exception as e:
         logger.error(f"MongoDB connection failed: {e}")
         raise

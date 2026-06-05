@@ -17,7 +17,11 @@ class DocWriterAgent:
     async def run(self) -> List[dict]:
         updates = []
         for doc in self.impact["affected_docs"]:
-            result = await self._rewrite_doc(doc)
+            try:
+                result = await self._rewrite_doc(doc)
+            except Exception as e:
+                logger.warning(f"Skipping {doc.get('path')}: {e}")
+                continue
             if result:
                 updates.append(result)
         return updates
@@ -59,7 +63,7 @@ TASK: Update ONLY these sections: {sections if sections else "any sections refer
 
 Return ONLY the complete markdown file content. No explanation, no backticks."""
 
-        updated = await call_gemini(prompt, model="pro", temperature=0.15)
+        updated = await call_gemini(prompt, model="pro", temperature=0.15, max_tokens=32768)
 
         if updated.strip() == current.strip():
             return None  # No actual changes — don't commit
