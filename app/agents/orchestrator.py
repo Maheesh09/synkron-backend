@@ -2,7 +2,6 @@ from app.agents.code_analyzer import CodeAnalyzerAgent
 from app.agents.impact_mapper import ImpactMapperAgent
 from app.agents.doc_writer   import DocWriterAgent
 from app.agents.pr_creator   import PRCreatorAgent
-from app.agent_builder.agent  import run_agent
 from app.database import get_db
 from app.models.pipeline_run import PipelineRun
 from app.config import settings
@@ -19,7 +18,7 @@ async def run_pipeline(before_sha: str, after_sha: str, repo_id: int, payload: d
 
     try:
         if settings.USE_AGENT_BUILDER:
-            # ── ADK local runner path (real MCP, Gemini API, no Vertex AI cost) ──
+            from app.agent_builder.agent import run_agent  # lazy: keep vertexai/adk off the default path
             result = await run_agent(
                 session_id=run.run_id,
                 before_sha=before_sha,
@@ -27,8 +26,7 @@ async def run_pipeline(before_sha: str, after_sha: str, repo_id: int, payload: d
                 repo_id=repo_id,
             )
         else:
-            # ── Direct 4-agent REST pipeline (default) ────────────────────────
-            result = await _run_direct_agents(run.run_id, after_sha, repo_id)
+            result = await _run_direct_agents(run.run_id, before_sha, after_sha, repo_id)
 
         duration = time.time() - t0
 
@@ -67,10 +65,10 @@ async def run_pipeline(before_sha: str, after_sha: str, repo_id: int, payload: d
         raise
 
 
-async def _run_direct_agents(run_id: str, commit_sha: str, repo_id: int) -> dict:
+async def _run_direct_agents(run_id: str, before_sha: str, after_sha: str, repo_id: int) -> dict:
     """Direct 4-agent REST pipeline — default path, works with no cloud setup."""
     logger.info(f"[{run_id}] Agent 1: Code Analyzer")
-    analysis = await CodeAnalyzerAgent(repo_id, commit_sha).run()
+    analysis = await CodeAnalyzerAgent(repo_id, before_sha, after_sha).run()
 
     if not analysis["doc_hints"]:
         return {"status": "skipped", "mr_url": None, "mr_id": None,
@@ -91,7 +89,7 @@ async def _run_direct_agents(run_id: str, commit_sha: str, repo_id: int) -> dict
                 "docs_updated": [], "doc_details": []}
 
     logger.info(f"[{run_id}] Agent 4: PR Creator")
-    mr = await PRCreatorAgent(repo_id, commit_sha, doc_updates, analysis).run()
+    mr = await PRCreatorAgent(repo_id, after_sha, doc_updates, analysis).run()
 
     return {
         "status":       "completed",
