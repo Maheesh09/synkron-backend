@@ -63,7 +63,7 @@ TASK: Update ONLY these sections: {sections if sections else "any sections refer
 
 Return ONLY the complete markdown file content. No explanation, no backticks."""
 
-        updated = await call_gemini(prompt, model="pro", temperature=0.15)
+        updated = await call_gemini(prompt, model="pro", temperature=0.15, max_tokens=32768)
 
         if updated.strip() == current.strip():
             return None  # No actual changes — don't commit
