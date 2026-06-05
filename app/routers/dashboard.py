@@ -30,7 +30,7 @@ async def get_health_stats():
     # Total docs updated across all runs
     docs_agg = await db.pipeline_runs.aggregate([
         {"$match": {"docs_updated": {"$exists": True}}},
-        {"$group": {"_id": None, "total": {"$sum": "$docs_updated"}}},
+        {"$group": {"_id": None, "total": {"$sum": {"$size": "$docs_updated"}}}},
     ]).to_list(length=1)
     docs_updated = docs_agg[0]["total"] if docs_agg else 0
 
