@@ -17,7 +17,11 @@ class DocWriterAgent:
     async def run(self) -> List[dict]:
         updates = []
         for doc in self.impact["affected_docs"]:
-            result = await self._rewrite_doc(doc)
+            try:
+                result = await self._rewrite_doc(doc)
+            except Exception as e:
+                logger.warning(f"Skipping {doc.get('path')}: {e}")
+                continue
             if result:
                 updates.append(result)
         return updates
