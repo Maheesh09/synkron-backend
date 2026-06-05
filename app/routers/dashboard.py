@@ -19,11 +19,28 @@ async def get_health_stats():
     total     = await db.pipeline_runs.count_documents({})
     completed = await db.pipeline_runs.count_documents({"status": "completed"})
     skipped   = await db.pipeline_runs.count_documents({"status": "skipped"})
+
+    # Avg duration of completed runs
+    dur_agg = await db.pipeline_runs.aggregate([
+        {"$match": {"status": "completed", "duration_seconds": {"$exists": True}}},
+        {"$group": {"_id": None, "avg": {"$avg": "$duration_seconds"}}},
+    ]).to_list(length=1)
+    avg_duration = round(dur_agg[0]["avg"], 1) if dur_agg else 0
+
+    # Total docs updated across all runs
+    docs_agg = await db.pipeline_runs.aggregate([
+        {"$match": {"docs_updated": {"$exists": True}}},
+        {"$group": {"_id": None, "total": {"$sum": "$docs_updated"}}},
+    ]).to_list(length=1)
+    docs_updated = docs_agg[0]["total"] if docs_agg else 0
+
     return {
-        "total_runs":    total,
+        "total_runs":     total,
         "completed_runs": completed,
-        "skipped_runs":  skipped,
-        "success_rate":  round(completed / total * 100, 1) if total > 0 else 0
+        "skipped_runs":   skipped,
+        "success_rate":   round(completed / total * 100, 1) if total > 0 else 0,
+        "avg_duration":   avg_duration,
+        "docs_updated":   docs_updated,
     }
 
 
