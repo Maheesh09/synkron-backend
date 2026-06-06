@@ -126,6 +126,11 @@ class GitLabMCP:
                 ],
             },
         )
+        
+    async def _delete(self, path: str) -> None:
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.delete(f"{API_BASE}{path}", headers=self.headers)
+            r.raise_for_status()
 
     async def create_merge_request(
         self, project_id: int, source_branch: str, title: str, description: str
