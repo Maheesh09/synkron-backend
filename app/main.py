@@ -67,7 +67,7 @@ def custom_openapi():
                 "name": "X-Gitlab-Token",
                 "in": "header",
                 "required": False,
-                "schema": {"type": "string", "default": settings.GITLAB_WEBHOOK_SECRET},
+                "schema": {"type": "string", "default": "your-webhook-secret"},
                 "description": "GitLab Webhook Secret"
             },
             {
@@ -118,7 +118,7 @@ def custom_openapi():
             post_method = openapi_schema["paths"][path]["post"]
             for param in post_method.get("parameters", []):
                 if param["name"] == "x-internal-token":
-                    param["schema"]["default"] = settings.INTERNAL_SECRET
+                    param["schema"]["default"] = "your-internal-token"
             
             example_val = {
                 "before": "0000000000000000000000000000000000000000",
