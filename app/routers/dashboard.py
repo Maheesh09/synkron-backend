@@ -122,15 +122,16 @@ async def connect_repo(body: dict):
 
     try:
         await mcp._post(
-            f"/projects/{path.replace('/', '%2F')}/hooks",
-            {
-                "url":                     webhook_url,
-                "token":                   webhook_token,
-                "push_events":             True,
-                "merge_requests_events":   True,
-                "enable_ssl_verification": True,
-            },
-        )
+        f"/projects/{path.replace('/', '%2F')}/hooks",
+        {
+            "url":                       webhook_url,
+            "token":                     webhook_token,
+            "push_events":               True,
+            "push_events_branch_filter": project.get("default_branch", "main"),
+            "merge_requests_events":     True,
+            "enable_ssl_verification":   True,
+        },
+    )
     except Exception as e:
         error_str = str(e)
         if "403" in error_str or "401" in error_str:
