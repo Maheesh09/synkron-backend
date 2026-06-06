@@ -1,11 +1,11 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from app.database import get_db
 
 router = APIRouter()
 
 
 @router.get("/runs")
-async def get_recent_runs(limit: int = 20):
+async def get_recent_runs(limit: int = Query(20, ge=1, le=100)):
     db   = get_db()
     runs = await db.pipeline_runs.find(
         {}, {"_id": 0}
@@ -79,7 +79,13 @@ async def connect_repo(body: dict):
     try:
         project = await mcp._get(f"/projects/{path.replace('/', '%2F')}")
     except Exception as e:
-        raise HTTPException(422, f"Cannot access project: {e}")
+        error_str = str(e)
+        if "404" in error_str:
+            raise HTTPException(422, "Repository not found. Please check if the URL is correct and if the repository is accessible.")
+        elif "401" in error_str or "403" in error_str:
+            raise HTTPException(422, "Access denied. Please ensure your GitLab token has permission to access this repository.")
+        else:
+            raise HTTPException(422, "Could not connect to the repository. Please verify the URL and your token permissions.")
 
     # Insert or update the repository in the database directly
     # This bypasses the need to wait for a webhook push to discover the repo
