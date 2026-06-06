@@ -33,8 +33,21 @@ async def gitlab_webhook(
     if event == "Push Hook":
         if payload.get("total_commits_count", 0) == 0:
             return {"status": "ignored", "reason": "no commits"}
-        if payload.get("user_username") == "synkron-bot":
-            return {"status": "ignored", "reason": "synkron commit"}
+
+        commits = payload.get("commits",[])
+
+    # Guard 1: commit was authored by synkron-bot (squash / fast-forward merge)
+        if any(c.get("author", {}).get("name") == "synkron-bot" for c in commits):
+            return {"status": "ignored", "reason": "synkron-bot authored commit"}
+
+    # Guard 2: merge commit from a synkron/docs-* branch
+        if any("synkron/docs-" in c.get("message", "") for c in commits):
+         return {"status": "ignored", "reason": "synkron merge commit"}
+
+    # Guard 3: commit message tagged [synkron]
+
+        if any("[synkron]" in c.get("message", "") for c in commits):
+         return {"status": "ignored", "reason": "synkron tagged commit"}
         background_tasks.add_task(enqueue_pipeline, payload)
         logger.info(f"Queued pipeline for repo {project_id}")
 

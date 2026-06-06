@@ -6,6 +6,7 @@ logger = logging.getLogger(__name__)
 
 _LOCK_OR_BINARY = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".lock", ".pyc")
 _EXACT_SKIP     = ("package-lock.json", "yarn.lock", "poetry.lock")
+_DOC_EXTENSIONS = (".md", ".rst", ".mdx", ".txt")
 
 
 class CodeAnalyzerAgent:
@@ -67,6 +68,7 @@ Return ONLY the JSON object, no markdown, no explanation."""
     def _should_skip(name: str) -> bool:
         if name in _EXACT_SKIP:                 return True
         if name.endswith(_LOCK_OR_BINARY):      return True
+        if name.endswith(_DOC_EXTENSIONS):      return True
         if "__pycache__" in name:               return True
         stem = name.rsplit(".", 1)[0]
         # Only real test files — 'contest_helper.py' is NOT a test file.
