@@ -52,9 +52,18 @@ async def get_repositories():
     ).to_list(length=50)
     return repos
 
+@router.delete("/repos/{repo_id}")
+async def delete_repository(repo_id: int):
+    db = get_db()
+    result = await db.repositories.delete_one({"repo_id": repo_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    return {"status": "success"}
+
 @router.post("/repos/connect")
 async def connect_repo(body: dict):
     import re
+    from datetime import datetime
     from app.services.gitlab_mcp import GitLabMCP
     from app.config import settings
 
@@ -72,6 +81,21 @@ async def connect_repo(body: dict):
     except Exception as e:
         raise HTTPException(422, f"Cannot access project: {e}")
 
+    # Insert or update the repository in the database directly
+    # This bypasses the need to wait for a webhook push to discover the repo
+    db = get_db()
+    repo_doc = {
+        "repo_id": project["id"],
+        "name": project["name_with_namespace"],
+        "url": project["web_url"],
+        "last_seen": datetime.utcnow().isoformat() + "Z"
+    }
+    await db.repositories.update_one(
+        {"repo_id": project["id"]},
+        {"$set": repo_doc},
+        upsert=True
+    )
+
     return {
         "project_id":     project["id"],
         "name":           project["name_with_namespace"],
@@ -79,4 +103,4 @@ async def connect_repo(body: dict):
         "webhook_url":    f"{settings.SERVICE_URL}/webhook/gitlab",
         "webhook_secret": settings.GITLAB_WEBHOOK_SECRET[:4] + "••••",
         "status":         "ready"
-    }    
+    }
