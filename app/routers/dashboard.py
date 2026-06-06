@@ -1,11 +1,11 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from app.database import get_db
 
 router = APIRouter()
 
 
 @router.get("/runs")
-async def get_recent_runs(limit: int = 20):
+async def get_recent_runs(limit: int = Query(20, ge=1, le=100)):
     db   = get_db()
     runs = await db.pipeline_runs.find(
         {}, {"_id": 0}
