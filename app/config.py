@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # in-process against the Gemini API using GOOGLE_API_KEY.
     USE_AGENT_BUILDER: bool = False
 
+    # Firebase Authentication — project that mints the user ID tokens.
+    FIREBASE_PROJECT_ID: str = ""
+
     # Gemini API key for the local ADK runner (get from https://aistudio.google.com).
     # ADK reads GOOGLE_API_KEY directly from the environment; we surface it here
     # so run_agent() can ensure it's set before the Runner initialises.

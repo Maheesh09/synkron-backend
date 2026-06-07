@@ -4,6 +4,14 @@ from app.routers import webhook, pipeline, dashboard
 from app.database import connect_db, disconnect_db
 import logging
 from contextlib import asynccontextmanager
+import firebase_admin
+from app.config import settings as _settings
+
+# Initialise the Firebase Admin SDK once. On Cloud Run this uses the service
+# account's Application Default Credentials; verify_id_token only needs the
+# project id to validate the token audience.
+if not firebase_admin._apps:
+    firebase_admin.initialize_app(options={"projectId": _settings.FIREBASE_PROJECT_ID})
 
 
 @asynccontextmanager
