@@ -18,3 +18,4 @@ mcp>=1.0.0
 
 tenacity>=8.2.3
 dnspython>=2.6.1
+firebase-admin>=6.5.0
