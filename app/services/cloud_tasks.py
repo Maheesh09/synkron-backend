@@ -34,11 +34,8 @@ def _create_task(endpoint: str, payload: dict) -> str:
                         "X-Internal-Token": settings.INTERNAL_SECRET},
             "body": json.dumps(payload).encode(),
         },
-        "retry_config": {
-            "max_attempts": 3,
-            "min_backoff": duration_pb2.Duration(seconds=30),
-            "max_backoff": duration_pb2.Duration(seconds=120),
-        },
+        # Give the task time to run the full agent pipeline (default is 10 min).
+        "dispatch_deadline": duration_pb2.Duration(seconds=600),
     }
     return client.create_task(parent=queue_path, task=task).name
 

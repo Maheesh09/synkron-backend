@@ -79,7 +79,7 @@ def _build_agent() -> LlmAgent:
     """
     return LlmAgent(
         name="synkron_doc_agent",
-        model="gemini-3.5-flash",   # Consistent with the direct REST path
+        model="gemini-3.1-flash-lite",   # 15 RPM free tier (vs 5 for gemini-3.5-flash); enough headroom for one full agent run
         description="Autonomous documentation maintenance agent that keeps GitLab docs in sync with code",
         instruction=SYNKRON_INSTRUCTION,
         tools=[create_gitlab_mcp_toolset()],
