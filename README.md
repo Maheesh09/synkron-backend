@@ -1,236 +1,316 @@
-# Synkron
+# Synkron — Backend
 
-Synkron keeps documentation honest. Every time someone pushes code to a GitLab repository, Synkron reads what changed, figures out which documents are now wrong, rewrites only those parts, and opens a merge request with the fix. Nobody has to remember to update the README. The merge request simply shows up, and a person decides whether to merge it.
+> Push code. Merge docs.
 
-This repository is the backend: a FastAPI service that listens for GitLab push events and runs the documentation pipeline behind them.
+Synkron is an AI agent that keeps documentation honest. Every time a developer pushes code to a GitLab repository, Synkron reads the diff, figures out which documentation files are now wrong, rewrites only the affected sections, and opens a merge request with the fix. Nobody has to remember to update the README. The merge request simply shows up.
 
-Status: active development, built under a hackathon deadline. Treat it as early and read the limitations near the end before relying on it.
+This repository is the backend service: a FastAPI application that receives GitLab push webhooks, runs the documentation pipeline, and serves the dashboard API used by the frontend.
 
-## The problem it solves
+Built for the [Google Cloud Rapid Agent Hackathon](https://rapid-agent.devpost.com) — GitLab track.
 
-Documentation rots. Code changes daily, docs get fixed whenever someone finally notices they are stale, and the gap between the two is where new developers lose hours and where bug reports get filed against behavior that no longer exists. Most teams know this and still fall behind, because updating docs is a separate chore that competes with shipping.
+---
 
-Synkron removes the separate chore. Keeping docs current becomes a side effect of pushing code, the same way a test suite runs in CI without anyone clicking a button.
+## What It Does
 
-## Two execution paths
+Documentation rots. Code changes daily, docs get fixed whenever someone finally notices they are stale, and the gap between the two is where new developers lose hours. Most teams know this and still fall behind, because updating docs is a separate chore that competes with shipping.
 
-Synkron can run the pipeline in two distinct ways, toggled via environment variables:
+Synkron removes the chore. Keeping docs current becomes a side effect of pushing code, the same way a test suite runs in CI without anyone clicking a button.
 
-1. **Direct REST Pipeline (Default)**: A lightweight, 4-agent sequential workflow that connects directly to GitLab via REST. It includes a feedback loop that learns from human edits to MRs over time.
-2. **MCP ADK Runner Path**: A single Google ADK `LlmAgent` running locally against the Gemini API. Instead of REST, it launches the official `@zereight/mcp-gitlab` server as a local subprocess and executes all GitLab operations through the Model Context Protocol (MCP).
+---
 
-## How it works, start to finish
+## How It Works
 
-There is one way in, regardless of which execution path is active.
+There is one way in regardless of which execution path is active.
 
-A developer pushes code as they normally would. GitLab sends a push event to Synkron's webhook. Synkron inspects the event, ignores anything not worth acting on (empty pushes, and crucially its own bot commits so it never reacts to itself), and drops the real work onto a background queue. The web request returns right away, so GitLab is never left waiting.
+A developer pushes code normally. GitLab sends a push event to the webhook endpoint. Synkron validates the token, ignores anything not worth acting on (empty pushes and its own bot commits, so it never reacts to itself), and drops the real work onto a Cloud Tasks queue. The web request returns immediately so GitLab is never left waiting.
 
-The queued job runs the pipeline. If the default Direct REST pipeline is used, four agents run in order:
+### Execution Path 1 — Direct REST Pipeline (Default)
 
-1. Code Analyzer. Reads the commit diff, discards noise such as lock files and test fixtures, and asks the model to describe what actually changed in plain language. It returns a short summary plus a handful of keywords a developer would search for in the docs. If the change is a pure refactor with no behavior difference, it returns nothing and the run stops here.
+When `USE_AGENT_BUILDER` is `false`, four agents run in sequence:
 
-2. Impact Mapper. Takes those keywords and scans the repository's documentation files (Markdown, reStructuredText, OpenAPI specs, and similar). It scores each document for how likely it is to be affected and keeps only the ones above a confidence threshold. If nothing clears the bar, the run stops.
+**Code Analyzer** reads the commit diff, discards noise such as lock files and test fixtures, and asks Gemini to describe what actually changed in plain language. It returns a short summary and a handful of keywords a developer would search for in the docs. If the change is a pure refactor with no behaviour difference, it returns nothing and the run stops here.
 
-3. Doc Writer. For each affected document, it rewrites only the sections that describe the changed behavior. It is instructed to leave everything else untouched: the same headings, the same tone, the same structure. The aim is a change a careful human would have made, not a wholesale rewrite of the file.
+**Impact Mapper** takes those keywords, scans the repository's documentation files (Markdown, reStructuredText, OpenAPI specs, and similar), scores each one for relevance, and keeps only those above a confidence threshold. If nothing clears the bar, the run stops.
 
-4. PR Creator. Creates a branch named after the commit, commits the updated docs under the synkron-bot author, and opens a merge request with a clear title and description. Then it stops and waits for a person to review.
+**Doc Writer** rewrites only the sections that describe the changed behaviour in each affected document, leaving everything else untouched: same headings, same tone, same structure.
 
-*(If the MCP ADK Runner path is active, a single agent handles all these steps via MCP tool calls).*
+**PR Creator** creates a branch named after the commit, commits the updated docs, and opens a merge request titled `Docs: [summary]`. Then it waits for a human to review.
 
-Every run is written to the database with its status, how long it took, and the merge request it produced, so you can always see what Synkron has been doing.
+### Execution Path 2 — MCP ADK Runner
 
-## The feedback loop
+When `USE_AGENT_BUILDER` is `true`, a single Google ADK `LlmAgent` powered by Gemini 3.1 Flash Lite handles all the same steps. Instead of REST, it launches the official `@zereight/mcp-gitlab` server as a local subprocess and executes every GitLab operation through the Model Context Protocol. The agent picks the right MCP tool at each step by reasoning about its goal, not by following a hardcoded function sequence.
 
-This is the part meant to make Synkron improve rather than stay average.
+The agent runs in process on the same Cloud Run instance, which ensures the Node.js MCP subprocess is always co located with the agent.
 
-When a reviewer edits one of Synkron's merge requests before merging it, those edits carry information: this is how the team actually wants their docs to read. Synkron watches for merge events on its own merge requests, captures the difference between what it wrote and what was merged, and stores those correction patterns. The Doc Writer can then lean on them to match the team's voice instead of guessing at it.
+### The Feedback Loop
 
-An honest caveat: this only pays off with steady use. A team that adopts Synkron and keeps correcting it will watch the quality climb. A team that tries it once and walks away will not see the benefit.
+When a reviewer edits one of Synkron's merge requests before merging it, those edits are a signal: this is how the team actually wants their docs to read. Synkron watches for merge events on its own merge requests, captures the difference between what it wrote and what was merged, and stores those correction patterns in MongoDB. Future runs on the same repository draw on these patterns to match the team's voice.
 
-## Who actually touches it
+---
 
-Almost nobody, and that is on purpose. Synkron can run in two roles, and this project is built for the first one.
+## Tech Stack
 
-Operator deployment. One person sets Synkron up, deploys it, and adds a webhook to each repository they want covered. After that, the developers on those repositories change nothing about how they work. They push code; merge requests appear. There is no dashboard they sign into, no account to create, no plugin to install. The reasoning is simple: the easiest tool to adopt is one that asks for nothing.
+| Layer | Technology |
+|---|---|
+| API framework | FastAPI 0.118 |
+| Language | Python 3.11 |
+| AI agent (MCP path) | Google ADK 1.5 + Gemini 3.1 Flash Lite |
+| AI models (REST path) | Gemini 3.5 Flash via AI Studio |
+| MCP server | @zereight/mcp-gitlab (stdio subprocess) |
+| Database | MongoDB Atlas (Motor async driver) |
+| Queue | Google Cloud Tasks |
+| Auth validation | Firebase Admin SDK |
+| Hosting | Google Cloud Run |
 
-The other role, a shared service hosting many separate customers, is not what this codebase is for. The data model and configuration assume a single operator running their own instance.
+---
 
-## Project layout
+## Prerequisites
 
-```
-synkron-backend/
-  app/
-    main.py              FastAPI app, route wiring, startup and shutdown
-    config.py            Settings loaded from environment variables
-    database.py          MongoDB connection and index setup
-    routers/
-      webhook.py         Receives GitLab events
-      pipeline.py        Internal endpoints that run the pipeline and feedback
-      dashboard.py       Read only stats and run history
-    services/
-      gitlab_mcp.py      GitLab API client (commits, files, branches, merge requests)
-      gemini.py          Wrapper around the Gemini models
-      cloud_tasks.py     Background queue dispatch
-      feedback.py        Turns human edits into stored correction patterns
-    agents/
-      orchestrator.py    Runs the four agents in sequence
-      code_analyzer.py   Agent 1
-      impact_mapper.py   Agent 2
-      doc_writer.py      Agent 3
-      pr_creator.py      Agent 4
-    agent_builder/       Optional path for running on a hosted agent engine
-    models/
-      pipeline_run.py    Database document shapes
-  scripts/               Operational scripts
-  requirements.txt
-  .env.example
-```
+* Python 3.11 or newer
+* Node.js 20 and npm (required for the MCP path — the MCP server runs as a Node subprocess)
+* A MongoDB Atlas cluster (the free M0 tier is sufficient)
+* A GitLab personal access token with the `api` scope
+* A Gemini API key from [Google AI Studio](https://aistudio.google.com)
+* A Google Cloud project with Cloud Run and Cloud Tasks enabled (for production)
 
-## The endpoints
+---
 
-Public.
+## Local Development
 
-GET / returns basic service information.
+**1. Clone and create a virtual environment**
 
-GET /health is a simple health check for uptime monitoring.
+```bash
+git clone https://github.com/Maheesh09/synkron-backend.git
+cd synkron-backend
 
-POST /webhook/gitlab is where GitLab sends events. It is guarded by a shared secret token that GitLab includes on every call.
-
-Internal. These are protected by a separate secret header and are meant to be called by the queue, not by people.
-
-POST /internal/run-pipeline runs the full documentation pipeline for one commit.
-
-POST /internal/process-feedback records a human correction.
-
-Dashboard. These are read only.
-
-GET /api/runs lists recent pipeline runs.
-
-GET /api/health returns run counts and a success rate across everything Synkron has processed.
-
-GET /api/repos lists the repositories Synkron is aware of.
-
-## What you need first
-
-Python 3.11 or newer.
-
-Node.js and npm (required for the MCP path to spawn the GitLab MCP server). Once installed, run `npm install -g @zereight/mcp-gitlab` so the server starts instantly.
-
-A MongoDB database. The free Atlas tier is enough to begin with.
-
-A GitLab personal access token with the api scope, so Synkron can read commits and open merge requests.
-
-A Gemini API key (or Google AI Studio key).
-
-## Running it on your machine
-
-Create and activate a virtual environment, then install the dependencies.
-
-```
 python -m venv venv
-
-# Windows
-venv\Scripts\activate
 
 # macOS or Linux
 source venv/bin/activate
 
+# Windows PowerShell
+venv\Scripts\activate
+```
+
+**2. Install Python dependencies**
+
+```bash
 pip install -r requirements.txt
 ```
 
-Copy the example environment file and fill in your own values.
+**3. Install the GitLab MCP server globally** (required for the MCP path)
 
+```bash
+npm install -g @zereight/mcp-gitlab
 ```
+
+**4. Create your environment file**
+
+```bash
 cp .env.example .env
 ```
 
-For local work there is a LOCAL_DEV switch. With it turned on, Synkron skips the cloud queue and calls its own internal endpoint directly, which lets you run the whole thing with no cloud setup at all. Start the server like this on macOS or Linux:
+Open `.env` and fill in your values. See the Environment Variables section below for what each one does.
 
-```
+**5. Start the server**
+
+`LOCAL_DEV=true` bypasses Cloud Tasks and calls the internal pipeline endpoint directly, so you can run the whole thing without any cloud setup.
+
+```bash
+# macOS or Linux
 LOCAL_DEV=true uvicorn app.main:app --reload --port 8080
-```
 
-On Windows PowerShell, set the variable first, then start the server:
-
-```
+# Windows PowerShell
 $env:LOCAL_DEV="true"
 uvicorn app.main:app --reload --port 8080
 ```
 
-You can trigger a run by hand without waiting for a real push. Send a commit SHA and a project ID to the internal endpoint, using the internal secret from your .env file:
+**6. Trigger a run manually**
+
+You can test the pipeline without waiting for a real push by calling the internal endpoint directly:
+
+```bash
+curl -X POST http://localhost:8080/internal/run-pipeline \
+  -H "X-Internal-Token: your_internal_secret" \
+  -H "Content-Type: application/json" \
+  -d '{"after": "FULL_COMMIT_SHA", "project": {"id": YOUR_GITLAB_PROJECT_ID}}'
+```
+
+Watch the server logs. Each agent announces itself as it runs, and if there are docs worth changing, a merge request URL appears at the end.
+
+**7. Connect a real GitLab repository**
+
+Expose your local server with a tunnel such as ngrok, then add a webhook in your GitLab repository settings pointing at `https://your-tunnel-url/webhook/gitlab`. Enable Push events and Merge request events, and set the secret token to match `GITLAB_WEBHOOK_SECRET` in your `.env`. After that, a normal `git push` runs the full pipeline.
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and set these values before running.
+
+| Variable | Required | Description |
+|---|---|---|
+| `GITLAB_PAT` | Yes | Personal access token with the `api` scope. Used to read commits and open merge requests. |
+| `GITLAB_WEBHOOK_SECRET` | Yes | Any string. Set the same value as the secret token when you register the webhook in GitLab. |
+| `GEMINI_API_KEY` | Yes | API key from Google AI Studio. Used by the direct REST pipeline. |
+| `MONGODB_URI` | Yes | MongoDB Atlas connection string. |
+| `MONGODB_DB_NAME` | No | Database name. Defaults to `synkron-cluster`. |
+| `SERVICE_URL` | Yes | The public base URL of this service. Cloud Tasks uses it to call back into the internal endpoints. |
+| `INTERNAL_SECRET` | Yes | A random string that protects the internal endpoints from being called by anyone other than the queue. |
+| `FIREBASE_PROJECT_ID` | Yes | The Firebase project ID used to verify user ID tokens from the frontend. |
+| `USE_AGENT_BUILDER` | No | Set to `true` to use the MCP ADK Runner path instead of the direct REST pipeline. Defaults to `false`. |
+| `GOOGLE_API_KEY` | No | API key for the ADK runner. Defaults to `GEMINI_API_KEY` if left blank. |
+| `GOOGLE_GENAI_USE_VERTEXAI` | No | Set to `FALSE` to ensure the ADK runner uses the free Gemini API instead of Vertex AI billing. |
+| `GOOGLE_CLOUD_PROJECT` | No | Your Google Cloud project ID. Required when running with Cloud Tasks or Vertex AI. |
+| `GCP_REGION` | No | Cloud region. Defaults to `asia-south1`. |
+| `AGENT_ENGINE_RESOURCE` | No | Set only if you deployed the agent to Vertex AI Reasoning Engine. Optional. |
+| `LOCAL_DEV` | No | Set to `true` for local development. Bypasses Cloud Tasks. Never set this in production. |
+
+---
+
+## Deploying to Cloud Run
+
+**1. Create the Cloud Tasks queue**
+
+```bash
+gcloud tasks queues create synkron-pipeline-queue --location YOUR_REGION
+```
+
+**2. Grant the Cloud Run service account permission to enqueue tasks**
+
+```bash
+PROJECT_NUM=$(gcloud projects describe YOUR_PROJECT_ID --format="value(projectNumber)")
+
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:${PROJECT_NUM}-compute@developer.gserviceaccount.com" \
+  --role="roles/cloudtasks.enqueuer"
+```
+
+**3. Create `env.yaml` with your production values**
+
+```yaml
+GITLAB_PAT: "your_token"
+GITLAB_WEBHOOK_SECRET: "any_non_empty_string"
+GEMINI_API_KEY: "your_key"
+GOOGLE_API_KEY: "your_key"
+MONGODB_URI: "your_atlas_uri"
+MONGODB_DB_NAME: "synkron-cluster"
+SERVICE_URL: "https://YOUR_CLOUD_RUN_URL"
+INTERNAL_SECRET: "a_random_secret"
+FIREBASE_PROJECT_ID: "your_firebase_project"
+USE_AGENT_BUILDER: "true"
+GOOGLE_GENAI_USE_VERTEXAI: "FALSE"
+LOCAL_DEV: "false"
+GOOGLE_CLOUD_PROJECT: "your_project_id"
+GCP_REGION: "your_region"
+```
+
+**4. Deploy**
+
+```bash
+gcloud run deploy synkron-backend \
+  --source . \
+  --region YOUR_REGION \
+  --allow-unauthenticated \
+  --cpu 1 \
+  --memory 1Gi \
+  --timeout 600 \
+  --env-vars-file env.yaml
+```
+
+**5. Update the queue to prevent retry storms**
+
+```bash
+gcloud tasks queues update synkron-pipeline-queue \
+  --location YOUR_REGION \
+  --max-attempts=1 \
+  --max-concurrent-dispatches=1
+```
+
+This ensures one push always maps to exactly one pipeline attempt with no concurrent overlap.
+
+---
+
+## API Reference
+
+### Public
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Service info |
+| `GET` | `/health` | Health check for uptime monitoring |
+| `POST` | `/webhook/gitlab/{project_id}` | Receives GitLab push and merge request events |
+
+### Dashboard (requires Firebase ID token as Bearer)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/repos` | Lists connected repositories for the signed in user |
+| `POST` | `/api/repos/connect` | Connects a new GitLab repository |
+| `DELETE` | `/api/repos/{id}` | Removes a connected repository |
+| `POST` | `/api/repos/{id}/rotate-token` | Rotates the webhook token for a repository |
+| `GET` | `/api/runs` | Lists recent pipeline runs |
+| `GET` | `/api/health` | Run counts and success rate |
+
+### Internal (requires `X-Internal-Token` header)
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/internal/run-pipeline` | Runs the full documentation pipeline for one commit |
+| `POST` | `/internal/process-feedback` | Records a human correction from a merged MR |
+
+---
+
+## Project Layout
 
 ```
-curl -X POST http://localhost:8080/internal/run-pipeline -H "X-Internal-Token: your_internal_secret" -H "Content-Type: application/json" -d "{\"after\": \"FULL_COMMIT_SHA\", \"project\": {\"id\": YOUR_PROJECT_ID}}"
+app/
+  main.py                FastAPI app, route wiring, startup and shutdown
+  config.py              Settings loaded from environment variables
+  database.py            MongoDB connection and index setup
+  auth.py                Firebase ID token verification
+  routers/
+    webhook.py           Receives GitLab events and guards against loops
+    pipeline.py          Internal endpoint that runs the pipeline
+    dashboard.py         Read-only stats and run history (auth-gated)
+  services/
+    gitlab_mcp.py        GitLab REST client (commits, files, branches, MRs)
+    gemini.py            Gemini model wrapper for the REST pipeline
+    cloud_tasks.py       Cloud Tasks dispatch
+    feedback.py          Converts human MR edits into correction patterns
+  agents/
+    orchestrator.py      Sequences the four agents
+    code_analyzer.py     Agent 1 — understands what changed
+    impact_mapper.py     Agent 2 — finds relevant doc files
+    doc_writer.py        Agent 3 — rewrites affected sections
+    pr_creator.py        Agent 4 — opens the merge request
+  agent_builder/
+    agent.py             ADK LlmAgent definition (MCP path)
+    tools.py             MCPToolset setup for @zereight/mcp-gitlab
+  models/
+    pipeline_run.py      MongoDB document shapes
 ```
 
-Watch the server logs. Each agent announces itself as it runs, and if there are docs worth changing, a merge request URL comes back at the end.
+---
 
-To test the real path, expose your local server with a tunnel such as ngrok and point a GitLab webhook at the public address. After that, an ordinary push sets the whole thing in motion.
+## Design Notes
 
-## Configuration
+**One service, not a fleet.** The pipeline is naturally sequential, the deadline was real, and a single well organised service is easier to reason about than several services talking to each other over a network. The folder structure keeps the layers cleanly separated, so splitting is straightforward later if needed.
 
-Synkron reads everything from environment variables. Here is what each one does.
+**Quality over volume.** Synkron lives or dies on whether developers merge its work without heavy editing. A tool that opens noisy or wrong merge requests gets ignored within a week. Everything in the pipeline, from the relevance threshold to the instruction that the Doc Writer should change as little as possible, exists to protect that one outcome.
 
-GITLAB_PAT is the personal access token used for every GitLab call. It needs the api scope so Synkron can create branches and merge requests, not just read.
+**Webhook security.** Each connected repository gets its own random token, stored as a SHA256 hash in MongoDB. A single shared secret (a common pattern in similar tools) is a single point of failure: one leaked token compromises every repository. Synkron avoids that entirely.
 
-GITLAB_WEBHOOK_SECRET is a shared secret. GitLab sends it on each webhook call, and Synkron rejects any call where it does not match.
+---
 
-GEMINI_API_KEY is the key for the Gemini models used by the default direct REST pipeline.
+## Current Limitations
 
-USE_AGENT_BUILDER switches Synkron to use the MCP ADK Runner path when set to `true`.
+* Works with GitLab. GitHub support is not wired up yet.
+* The feedback loop pays off with steady use. Out of the box the Doc Writer is only as good as its prompt and the model.
+* Documentation quality should always be reviewed by a human before merging.
 
-GOOGLE_API_KEY is used by the MCP ADK Runner path. It defaults to GEMINI_API_KEY if left blank.
-
-GOOGLE_GENAI_USE_VERTEXAI should be set to `FALSE` to ensure the ADK Runner uses the free-tier Gemini API rather than billing a Vertex AI project.
-
-MONGODB_URI is the connection string for your MongoDB instance.
-
-MONGODB_DB_NAME is the name of the database to use.
-
-INTERNAL_SECRET guards the internal endpoints, so only the queue can start the pipeline.
-
-SERVICE_URL is the public base address of the deployed service. The queue uses it to call back into the internal endpoints.
-
-GOOGLE_CLOUD_PROJECT and GCP_REGION are your Google Cloud project and region, used when running on Cloud Run with Cloud Tasks.
-
-AGENT_ENGINE_RESOURCE is optional. Set it only if you deployed the agent to Vertex AI Reasoning Engine using the provided scripts.
-
-LOCAL_DEV is for local work only. Set it to true to bypass the cloud queue while developing, and never set it in production.
-
-## Adding a repository
-
-Once Synkron is deployed, you cover a repository by giving it a webhook. In GitLab, open the repository settings, go to Webhooks, and add one.
-
-Set the URL to your service address followed by /webhook/gitlab.
-
-Set the secret token to the same value as GITLAB_WEBHOOK_SECRET.
-
-Enable Push events. Also enable Merge request events if you want the feedback loop to capture human edits.
-
-Save it, use GitLab's test button to confirm Synkron answers, and that is the whole setup. From then on, every push to that repository runs through the pipeline.
-
-## How it runs in production
-
-The intended setup is Google Cloud Run for the service and Cloud Tasks for the queue. The webhook answers fast and hands the job to the queue. The queue then calls the internal endpoint, which does the slow work of talking to the model and to GitLab. This keeps the webhook responsive and gives the heavy work automatic retries when something fails partway through.
-
-MongoDB holds three kinds of records: the pipeline runs themselves, the repositories under management, and the correction patterns learned from human edits.
-
-## Design choices worth knowing
-
-It is one service, not a fleet of small ones. The pipeline is naturally sequential, the deadline was real, and a single well organized service is easier to reason about than several services talking to each other over the network. The folders keep the layers cleanly separated, so it can be split later if it ever needs to be.
-
-The database is MongoDB, and the code assumes it. The document model and the async driver run through the entire backend, so swapping to another database would be a rewrite rather than a config change. That tradeoff was made deliberately for speed of building.
-
-Quality is the thing that matters, not volume. Synkron lives or dies on whether people merge its work without heavy editing. A tool that opens noisy or wrong merge requests gets ignored within a week. Everything in the pipeline, from the relevance threshold to the rule that the writer should change as little as possible, exists to protect that one outcome.
-
-## Current limitations
-
-It works with GitLab. GitHub and other hosts are not wired up.
-
-The feedback loop needs ongoing use before its value shows. Out of the box, the Doc Writer is only as good as its prompt and the underlying model.
-
-Documentation quality is still being tuned, and merge requests should be reviewed by a human, not merged blindly.
+---
 
 ## License
 
-See the LICENSE file in this repository.
+MIT — see [LICENSE](LICENSE).
