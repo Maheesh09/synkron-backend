@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(mes
 app = FastAPI(
     title="Synkron API",
     version="1.0.0",
-    description="AI documentation agent powered by GitLab MCP + Google Cloud Agent Builder + Gemini",
+    description="AI documentation agent powered by GitLab + Gemini",
     lifespan=lifespan,
 )
 

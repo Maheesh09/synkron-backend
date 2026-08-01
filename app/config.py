@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     GITLAB_WEBHOOK_SECRET: str
     GITLAB_PAT: str
 
-    # Google Cloud (only required when using Cloud Tasks or Vertex AI agent path)
+    # Google Cloud (only required when using Cloud Tasks)
     GOOGLE_CLOUD_PROJECT: str = ""
     GCP_REGION: str = "asia-south1"
 
@@ -23,22 +23,8 @@ class Settings(BaseSettings):
     # Gemini
     GEMINI_API_KEY: str
 
-    # ── Agent Builder (ADK local runner + optional Vertex AI deployment) ─────
-    # Set USE_AGENT_BUILDER=true in .env to run the ADK + MCP path instead of
-    # the direct 4-agent REST pipeline.  No Vertex AI required — the agent runs
-    # in-process against the Gemini API using GOOGLE_API_KEY.
-    USE_AGENT_BUILDER: bool = False
-
     # Firebase Authentication — project that mints the user ID tokens.
     FIREBASE_PROJECT_ID: str = ""
-
-    # Gemini API key for the local ADK runner (get from https://aistudio.google.com).
-    # ADK reads GOOGLE_API_KEY directly from the environment; we surface it here
-    # so run_agent() can ensure it's set before the Runner initialises.
-    GOOGLE_API_KEY: str = ""
-
-    # Only needed if you deploy to Vertex AI Agent Engine (optional).
-    AGENT_ENGINE_RESOURCE: str = ""
 
     class Config:
         env_file = ".env"

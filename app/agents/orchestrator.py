@@ -4,8 +4,7 @@ from app.agents.doc_writer   import DocWriterAgent
 from app.agents.pr_creator   import PRCreatorAgent
 from app.database import get_db
 from app.models.pipeline_run import PipelineRun
-from app.config import settings
-import time, logging, uuid
+import time, logging
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -29,16 +28,7 @@ async def run_pipeline(before_sha: str, after_sha: str, repo_id: int, payload: d
     t0  = time.time()
 
     try:
-        if settings.USE_AGENT_BUILDER:
-            from app.agent_builder.agent import run_agent  # lazy: keep vertexai/adk off the default path
-            result = await run_agent(
-                session_id=run.run_id,
-                before_sha=before_sha,
-                after_sha=after_sha,
-                repo_id=repo_id,
-            )
-        else:
-            result = await _run_direct_agents(run.run_id, before_sha, after_sha, repo_id)
+        result = await _run_direct_agents(run.run_id, before_sha, after_sha, repo_id)
 
         duration = time.time() - t0
 

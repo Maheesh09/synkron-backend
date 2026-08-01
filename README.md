@@ -20,13 +20,9 @@ Synkron removes the chore. Keeping docs current becomes a side effect of pushing
 
 ## How It Works
 
-There is one way in regardless of which execution path is active.
-
 A developer pushes code normally. GitLab sends a push event to the webhook endpoint. Synkron validates the token, ignores anything not worth acting on (empty pushes and its own bot commits, so it never reacts to itself), and drops the real work onto a Cloud Tasks queue. The web request returns immediately so GitLab is never left waiting.
 
-### Execution Path 1 — Direct REST Pipeline (Default)
-
-When `USE_AGENT_BUILDER` is `false`, four agents run in sequence:
+From there, four agents run in sequence:
 
 **Code Analyzer** reads the commit diff, discards noise such as lock files and test fixtures, and asks Gemini to describe what actually changed in plain language. It returns a short summary and a handful of keywords a developer would search for in the docs. If the change is a pure refactor with no behaviour difference, it returns nothing and the run stops here.
 
@@ -35,12 +31,6 @@ When `USE_AGENT_BUILDER` is `false`, four agents run in sequence:
 **Doc Writer** rewrites only the sections that describe the changed behaviour in each affected document, leaving everything else untouched: same headings, same tone, same structure.
 
 **PR Creator** creates a branch named after the commit, commits the updated docs, and opens a merge request titled `Docs: [summary]`. Then it waits for a human to review.
-
-### Execution Path 2 — MCP ADK Runner
-
-When `USE_AGENT_BUILDER` is `true`, a single Google ADK `LlmAgent` powered by Gemini 3.1 Flash Lite handles all the same steps. Instead of REST, it launches the official `@zereight/mcp-gitlab` server as a local subprocess and executes every GitLab operation through the Model Context Protocol. The agent picks the right MCP tool at each step by reasoning about its goal, not by following a hardcoded function sequence.
-
-The agent runs in process on the same Cloud Run instance, which ensures the Node.js MCP subprocess is always co located with the agent.
 
 ### The Feedback Loop
 
@@ -54,9 +44,7 @@ When a reviewer edits one of Synkron's merge requests before merging it, those e
 |---|---|
 | API framework | FastAPI 0.118 |
 | Language | Python 3.11 |
-| AI agent (MCP path) | Google ADK 1.5 + Gemini 3.1 Flash Lite |
-| AI models (REST path) | Gemini 3.5 Flash via AI Studio |
-| MCP server | @zereight/mcp-gitlab (stdio subprocess) |
+| AI models | Gemini 3.1 Flash Lite + Gemini 3.5 Flash via AI Studio |
 | Database | MongoDB Atlas (Motor async driver) |
 | Queue | Google Cloud Tasks |
 | Auth validation | Firebase Admin SDK |
@@ -67,7 +55,6 @@ When a reviewer edits one of Synkron's merge requests before merging it, those e
 ## Prerequisites
 
 * Python 3.11 or newer
-* Node.js 20 and npm (required for the MCP path — the MCP server runs as a Node subprocess)
 * A MongoDB Atlas cluster (the free M0 tier is sufficient)
 * A GitLab personal access token with the `api` scope
 * A Gemini API key from [Google AI Studio](https://aistudio.google.com)
@@ -98,13 +85,7 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-**3. Install the GitLab MCP server globally** (required for the MCP path)
-
-```bash
-npm install -g @zereight/mcp-gitlab
-```
-
-**4. Create your environment file**
+**3. Create your environment file**
 
 ```bash
 cp .env.example .env
@@ -112,7 +93,7 @@ cp .env.example .env
 
 Open `.env` and fill in your values. See the Environment Variables section below for what each one does.
 
-**5. Start the server**
+**4. Start the server**
 
 `LOCAL_DEV=true` bypasses Cloud Tasks and calls the internal pipeline endpoint directly, so you can run the whole thing without any cloud setup.
 
@@ -125,7 +106,7 @@ $env:LOCAL_DEV="true"
 uvicorn app.main:app --reload --port 8080
 ```
 
-**6. Trigger a run manually**
+**5. Trigger a run manually**
 
 You can test the pipeline without waiting for a real push by calling the internal endpoint directly:
 
@@ -138,7 +119,7 @@ curl -X POST http://localhost:8080/internal/run-pipeline \
 
 Watch the server logs. Each agent announces itself as it runs, and if there are docs worth changing, a merge request URL appears at the end.
 
-**7. Connect a real GitLab repository**
+**6. Connect a real GitLab repository**
 
 Expose your local server with a tunnel such as ngrok, then add a webhook in your GitLab repository settings pointing at `https://your-tunnel-url/webhook/gitlab`. Enable Push events and Merge request events, and set the secret token to match `GITLAB_WEBHOOK_SECRET` in your `.env`. After that, a normal `git push` runs the full pipeline.
 
@@ -158,12 +139,8 @@ Copy `.env.example` to `.env` and set these values before running.
 | `SERVICE_URL` | Yes | The public base URL of this service. Cloud Tasks uses it to call back into the internal endpoints. |
 | `INTERNAL_SECRET` | Yes | A random string that protects the internal endpoints from being called by anyone other than the queue. |
 | `FIREBASE_PROJECT_ID` | Yes | The Firebase project ID used to verify user ID tokens from the frontend. |
-| `USE_AGENT_BUILDER` | No | Set to `true` to use the MCP ADK Runner path instead of the direct REST pipeline. Defaults to `false`. |
-| `GOOGLE_API_KEY` | No | API key for the ADK runner. Defaults to `GEMINI_API_KEY` if left blank. |
-| `GOOGLE_GENAI_USE_VERTEXAI` | No | Set to `FALSE` to ensure the ADK runner uses the free Gemini API instead of Vertex AI billing. |
-| `GOOGLE_CLOUD_PROJECT` | No | Your Google Cloud project ID. Required when running with Cloud Tasks or Vertex AI. |
+| `GOOGLE_CLOUD_PROJECT` | No | Your Google Cloud project ID. Required when running with Cloud Tasks. |
 | `GCP_REGION` | No | Cloud region. Defaults to `asia-south1`. |
-| `AGENT_ENGINE_RESOURCE` | No | Set only if you deployed the agent to Vertex AI Reasoning Engine. Optional. |
 | `LOCAL_DEV` | No | Set to `true` for local development. Bypasses Cloud Tasks. Never set this in production. |
 
 ---
@@ -192,14 +169,11 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
 GITLAB_PAT: "your_token"
 GITLAB_WEBHOOK_SECRET: "any_non_empty_string"
 GEMINI_API_KEY: "your_key"
-GOOGLE_API_KEY: "your_key"
 MONGODB_URI: "your_atlas_uri"
 MONGODB_DB_NAME: "synkron-cluster"
 SERVICE_URL: "https://YOUR_CLOUD_RUN_URL"
 INTERNAL_SECRET: "a_random_secret"
 FIREBASE_PROJECT_ID: "your_firebase_project"
-USE_AGENT_BUILDER: "true"
-GOOGLE_GENAI_USE_VERTEXAI: "FALSE"
 LOCAL_DEV: "false"
 GOOGLE_CLOUD_PROJECT: "your_project_id"
 GCP_REGION: "your_region"
@@ -284,9 +258,6 @@ app/
     impact_mapper.py     Agent 2 — finds relevant doc files
     doc_writer.py        Agent 3 — rewrites affected sections
     pr_creator.py        Agent 4 — opens the merge request
-  agent_builder/
-    agent.py             ADK LlmAgent definition (MCP path)
-    tools.py             MCPToolset setup for @zereight/mcp-gitlab
   models/
     pipeline_run.py      MongoDB document shapes
 ```
