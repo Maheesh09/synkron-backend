@@ -78,3 +78,21 @@ class GitHubClient:
             for e in data.get("tree", [])
             if e.get("type") == "blob"
         ]
+
+
+    async def get_file_content(self, path: str, ref: str | None = None) -> str:
+        """
+        Return a text file's decoded content at `ref`.
+
+        The contents API returns base64. Files over ~1 MB come back with empty
+        content, so for those we fetch the blob by SHA, which has no size cap.
+        """
+        ref = ref or self.default_branch
+        resp = await self._request(
+            "GET", f"{self._repo_path}/contents/{path}", params={"ref": ref}
+        )
+        data = resp.json()
+        if data.get("encoding") == "base64" and data.get("content"):
+            return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+        blob = await self._request("GET", f"{self._repo_path}/git/blobs/{data['sha']}")
+        return base64.b64decode(blob.json()["content"]).decode("utf-8", errors="replace")
