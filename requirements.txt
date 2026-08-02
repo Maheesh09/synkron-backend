@@ -13,6 +13,9 @@ google-cloud-tasks==2.19.3
 
 google-genai>=1.28.0
 
+pyjwt>=2.8.0
+cryptography>=42.0.0
+
 tenacity>=8.2.3
 dnspython>=2.6.1
 firebase-admin>=6.5.0

@@ -3,9 +3,20 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    # GitLab
+    # GitLab (legacy — removed once the GitHub migration is complete)
     GITLAB_WEBHOOK_SECRET: str
     GITLAB_PAT: str
+
+    # ── GitHub App ───────────────────────────────────────────────────────────
+    # The App's identifier used as the JWT issuer. The numeric App ID works;
+    # GitHub also accepts the Client ID.
+    GITHUB_APP_ID: str = ""
+    # The App's RSA private key. Either the raw PEM (multi-line, with the
+    # BEGIN/END lines) or a base64-encoded PEM on a single line — the loader
+    # in github_auth.py accepts both.
+    GITHUB_APP_PRIVATE_KEY: str = ""
+    # Secret set on the App's webhook config; used to verify X-Hub-Signature-256.
+    GITHUB_WEBHOOK_SECRET: str = ""
 
     # Google Cloud (only required when using Cloud Tasks)
     GOOGLE_CLOUD_PROJECT: str = ""
