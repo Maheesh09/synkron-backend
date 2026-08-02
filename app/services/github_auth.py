@@ -49,7 +49,7 @@ def _load_private_key() -> str:
     raw = settings.GITHUB_APP_PRIVATE_KEY.strip()
     if not raw:
         raise RuntimeError("GITHUB_APP_PRIVATE_KEY is not set")
-    if "BEGIN" in raw:
+    if "-----BEGIN" in raw:
         return raw
     try:
         return base64.b64decode(raw).decode("utf-8")
