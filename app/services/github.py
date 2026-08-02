@@ -57,3 +57,24 @@ class GitHubClient:
             accept=_ACCEPT_DIFF,
         )
         return resp.text    
+
+    async def list_tree(self, ref: str | None = None) -> list[dict]:
+        """
+        List every file in the repo at `ref` (default branch if omitted).
+
+        GitHub tree entries only carry `path`; the Impact Mapper expects `name`
+        too. We normalise each entry to {name, path, type} and keep only blobs
+        (files, not directories), so that agent stays unchanged.
+        """
+        ref = ref or self.default_branch
+        resp = await self._request(
+            "GET", f"{self._repo_path}/git/trees/{ref}", params={"recursive": "1"}
+        )
+        data = resp.json()
+        if data.get("truncated"):
+            logger.warning(f"Tree for {self.owner}/{self.repo} was truncated by GitHub")
+        return [
+            {"name": e["path"].rsplit("/", 1)[-1], "path": e["path"], "type": e["type"]}
+            for e in data.get("tree", [])
+            if e.get("type") == "blob"
+        ]
