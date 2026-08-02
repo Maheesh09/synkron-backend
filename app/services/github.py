@@ -44,11 +44,13 @@ class GitHubClient:
         Code Analyzer's filter expects, no reconstruction needed.
 
         On the first push to a new branch, `before` is all zeros; GitHub can't
-        compare against that, so we fall back to the single commit's diff.
+        compare against that, so we compare against the default branch instead.
         """
         if not before_sha or set(before_sha) == {"0"}:
             resp = await self._request(
-                "GET", f"{self._repo_path}/commits/{after_sha}", accept=_ACCEPT_DIFF
+                "GET",
+                f"{self._repo_path}/compare/{self.default_branch}...{after_sha}",
+                accept=_ACCEPT_DIFF,
             )
             return resp.text
         resp = await self._request(
@@ -72,7 +74,10 @@ class GitHubClient:
         )
         data = resp.json()
         if data.get("truncated"):
-            logger.warning(f"Tree for {self.owner}/{self.repo} was truncated by GitHub")
+            raise RuntimeError(
+                f"Repository tree for {self.owner}/{self.repo} at ref '{ref}' was truncated by GitHub. "
+                "The repository is too large to retrieve the complete file list."
+            )
         return [
             {"name": e["path"].rsplit("/", 1)[-1], "path": e["path"], "type": e["type"]}
             for e in data.get("tree", [])
@@ -85,7 +90,8 @@ class GitHubClient:
         Return a text file's decoded content at `ref`.
 
         The contents API returns base64. Files over ~1 MB come back with empty
-        content, so for those we fetch the blob by SHA, which has no size cap.
+        content, so for those we fetch the raw content directly using the raw
+        media type, which is capped at 100 MB.
         """
         ref = ref or self.default_branch
         resp = await self._request(
@@ -94,5 +100,11 @@ class GitHubClient:
         data = resp.json()
         if data.get("encoding") == "base64" and data.get("content"):
             return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
-        blob = await self._request("GET", f"{self._repo_path}/git/blobs/{data['sha']}")
-        return base64.b64decode(blob.json()["content"]).decode("utf-8", errors="replace")
+        # For large files, fetch raw content directly
+        raw_resp = await self._request(
+            "GET",
+            f"{self._repo_path}/contents/{path}",
+            params={"ref": ref},
+            accept="application/vnd.github.raw+json"
+        )
+        return raw_resp.text
