@@ -36,3 +36,24 @@ class GitHubClient:
             resp = await client.request(method, f"{API_BASE}{path}", headers=headers, **kwargs)
             resp.raise_for_status()
             return resp
+
+    async def get_push_diff(self, before_sha: str, after_sha: str) -> str:
+        """
+        Unified diff for a push. Uses the raw-diff media type, so the result
+        already contains `diff --git a/… b/…` headers — the exact shape the
+        Code Analyzer's filter expects, no reconstruction needed.
+
+        On the first push to a new branch, `before` is all zeros; GitHub can't
+        compare against that, so we fall back to the single commit's diff.
+        """
+        if not before_sha or set(before_sha) == {"0"}:
+            resp = await self._request(
+                "GET", f"{self._repo_path}/commits/{after_sha}", accept=_ACCEPT_DIFF
+            )
+            return resp.text
+        resp = await self._request(
+            "GET",
+            f"{self._repo_path}/compare/{before_sha}...{after_sha}",
+            accept=_ACCEPT_DIFF,
+        )
+        return resp.text    
