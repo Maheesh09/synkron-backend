@@ -108,3 +108,24 @@ class GitHubClient:
             accept="application/vnd.github.raw+json"
         )
         return raw_resp.text
+
+    async def get_branch_head(self, branch: str) -> str:
+        """Return the commit SHA a branch currently points at."""
+        resp = await self._request("GET", f"{self._repo_path}/git/ref/heads/{branch}")
+        return resp.json()["object"]["sha"]
+
+    async def create_branch(self, new_branch: str, base: str | None = None) -> str:
+        """
+        Create a branch off `base` (default branch if omitted). Git has no
+        'make a branch' primitive — a branch is just a ref pointing at a
+        commit — so we resolve the base branch's head SHA first, then create a
+        ref at it. Returns that base SHA.
+        """
+        base = base or self.default_branch
+        base_sha = await self.get_branch_head(base)
+        await self._request(
+            "POST",
+            f"{self._repo_path}/git/refs",
+            json={"ref": f"refs/heads/{new_branch}", "sha": base_sha},
+        )
+        return base_sha
