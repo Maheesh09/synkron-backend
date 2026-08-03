@@ -1,5 +1,8 @@
 import base64
 import logging
+from shlex import quote
+
+from urllib.parse import quote
 
 import httpx
 
@@ -111,7 +114,8 @@ class GitHubClient:
 
     async def get_branch_head(self, branch: str) -> str:
         """Return the commit SHA a branch currently points at."""
-        resp = await self._request("GET", f"{self._repo_path}/git/ref/heads/{branch}")
+        escaped_branch = quote(branch, safe="/")
+        resp = await self._request("GET", f"{self._repo_path}/git/ref/heads/{escaped_branch}")
         return resp.json()["object"]["sha"]
 
     async def create_branch(self, new_branch: str, base: str | None = None) -> str:
