@@ -133,3 +133,44 @@ class GitHubClient:
             json={"ref": f"refs/heads/{new_branch}", "sha": base_sha},
         )
         return base_sha
+
+    async def commit_files(self, branch: str, files: dict[str, str], message: str) -> str:
+        """
+        Commit multiple files to `branch` in a single atomic commit via the
+        git data API:
+          1. read the branch head commit and its tree
+          2. build a NEW tree layered on the old one, one entry per changed file
+          3. create a commit whose parent is the old head
+          4. move the branch ref to the new commit
+
+        No author/committer is set, so GitHub attributes the commit to the App
+        itself — it appears as `synkron[bot]`. Returns the new commit SHA.
+        """
+        head_sha = await self.get_branch_head(branch)
+        head_commit = (await self._request(
+            "GET", f"{self._repo_path}/git/commits/{head_sha}"
+        )).json()
+        base_tree = head_commit["tree"]["sha"]
+
+        tree_entries = [
+            {"path": path, "mode": "100644", "type": "blob", "content": content}
+            for path, content in files.items()
+        ]
+        new_tree = (await self._request(
+            "POST",
+            f"{self._repo_path}/git/trees",
+            json={"base_tree": base_tree, "tree": tree_entries},
+        )).json()
+
+        new_commit = (await self._request(
+            "POST",
+            f"{self._repo_path}/git/commits",
+            json={"message": message, "tree": new_tree["sha"], "parents": [head_sha]},
+        )).json()
+
+        await self._request(
+            "PATCH",
+            f"{self._repo_path}/git/refs/heads/{branch}",
+            json={"sha": new_commit["sha"]},
+        )
+        return new_commit["sha"]
