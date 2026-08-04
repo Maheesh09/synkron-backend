@@ -1,6 +1,5 @@
 import base64
 import logging
-from shlex import quote
 
 from urllib.parse import quote
 
@@ -150,16 +149,47 @@ class GitHubClient:
         head_commit = (await self._request(
             "GET", f"{self._repo_path}/git/commits/{head_sha}"
         )).json()
-        base_tree = head_commit["tree"]["sha"]
+        base_tree_sha = head_commit["tree"]["sha"]
 
-        tree_entries = [
-            {"path": path, "mode": "100644", "type": "blob", "content": content}
-            for path, content in files.items()
-        ]
+        # Fetch the base tree to look up existing modes for paths
+        base_tree_resp = (await self._request(
+            "GET",
+            f"{self._repo_path}/git/trees/{base_tree_sha}",
+            params={"recursive": "1"}
+        )).json()
+
+        # Build a map of path -> (mode, type) from the base tree
+        existing_entries = {
+            entry["path"]: (entry["mode"], entry["type"])
+            for entry in base_tree_resp.get("tree", [])
+        }
+
+        tree_entries = []
+        for path, content in files.items():
+            # Determine mode: reuse existing mode if present, default to "100644" for new files
+            if path in existing_entries:
+                mode, entry_type = existing_entries[path]
+                # Reject if the entry is a tree or submodule (not a blob)
+                if entry_type != "blob":
+                    raise ValueError(
+                        f"Cannot commit content to path '{path}': "
+                        f"it is a '{entry_type}' (tree/submodule), not a blob. "
+                        "This method only supports committing blob content."
+                    )
+            else:
+                mode = "100644"  # Default mode for new regular files
+
+            tree_entries.append({
+                "path": path,
+                "mode": mode,
+                "type": "blob",
+                "content": content
+            })
+
         new_tree = (await self._request(
             "POST",
             f"{self._repo_path}/git/trees",
-            json={"base_tree": base_tree, "tree": tree_entries},
+            json={"base_tree": base_tree_sha, "tree": tree_entries},
         )).json()
 
         new_commit = (await self._request(
@@ -168,9 +198,10 @@ class GitHubClient:
             json={"message": message, "tree": new_tree["sha"], "parents": [head_sha]},
         )).json()
 
+        escaped_branch = quote(branch, safe="/")
         await self._request(
             "PATCH",
-            f"{self._repo_path}/git/refs/heads/{branch}",
+            f"{self._repo_path}/git/refs/heads/{escaped_branch}",
             json={"sha": new_commit["sha"]},
         )
         return new_commit["sha"]
