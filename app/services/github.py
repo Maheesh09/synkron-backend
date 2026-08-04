@@ -1,6 +1,5 @@
 import base64
 import logging
-from shlex import quote
 
 from urllib.parse import quote
 
@@ -133,3 +132,76 @@ class GitHubClient:
             json={"ref": f"refs/heads/{new_branch}", "sha": base_sha},
         )
         return base_sha
+
+    async def commit_files(self, branch: str, files: dict[str, str], message: str) -> str:
+        """
+        Commit multiple files to `branch` in a single atomic commit via the
+        git data API:
+          1. read the branch head commit and its tree
+          2. build a NEW tree layered on the old one, one entry per changed file
+          3. create a commit whose parent is the old head
+          4. move the branch ref to the new commit
+
+        No author/committer is set, so GitHub attributes the commit to the App
+        itself — it appears as `synkron[bot]`. Returns the new commit SHA.
+        """
+        head_sha = await self.get_branch_head(branch)
+        head_commit = (await self._request(
+            "GET", f"{self._repo_path}/git/commits/{head_sha}"
+        )).json()
+        base_tree_sha = head_commit["tree"]["sha"]
+
+        # Fetch the base tree to look up existing modes for paths
+        base_tree_resp = (await self._request(
+            "GET",
+            f"{self._repo_path}/git/trees/{base_tree_sha}",
+            params={"recursive": "1"}
+        )).json()
+
+        # Build a map of path -> (mode, type) from the base tree
+        existing_entries = {
+            entry["path"]: (entry["mode"], entry["type"])
+            for entry in base_tree_resp.get("tree", [])
+        }
+
+        tree_entries = []
+        for path, content in files.items():
+            # Determine mode: reuse existing mode if present, default to "100644" for new files
+            if path in existing_entries:
+                mode, entry_type = existing_entries[path]
+                # Reject if the entry is a tree or submodule (not a blob)
+                if entry_type != "blob":
+                    raise ValueError(
+                        f"Cannot commit content to path '{path}': "
+                        f"it is a '{entry_type}' (tree/submodule), not a blob. "
+                        "This method only supports committing blob content."
+                    )
+            else:
+                mode = "100644"  # Default mode for new regular files
+
+            tree_entries.append({
+                "path": path,
+                "mode": mode,
+                "type": "blob",
+                "content": content
+            })
+
+        new_tree = (await self._request(
+            "POST",
+            f"{self._repo_path}/git/trees",
+            json={"base_tree": base_tree_sha, "tree": tree_entries},
+        )).json()
+
+        new_commit = (await self._request(
+            "POST",
+            f"{self._repo_path}/git/commits",
+            json={"message": message, "tree": new_tree["sha"], "parents": [head_sha]},
+        )).json()
+
+        escaped_branch = quote(branch, safe="/")
+        await self._request(
+            "PATCH",
+            f"{self._repo_path}/git/refs/heads/{escaped_branch}",
+            json={"sha": new_commit["sha"]},
+        )
+        return new_commit["sha"]
