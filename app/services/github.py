@@ -205,3 +205,27 @@ class GitHubClient:
             json={"sha": new_commit["sha"]},
         )
         return new_commit["sha"]
+
+
+    async def create_pull_request(self, head_branch: str, title: str, body: str, base: str | None = None) -> dict:
+        """
+        Open a PR from `head_branch` into `base` (default branch if omitted).
+        Returns {"url": ..., "number": ...} — normalised keys so callers don't
+        touch GitHub's raw field names.
+        """
+        base = base or self.default_branch
+        resp = await self._request(
+            "POST",
+            f"{self._repo_path}/pulls",
+            json={"title": title, "head": head_branch, "base": base, "body": body},
+        )
+        data = resp.json()
+        return {"url": data["html_url"], "number": data["number"]}
+
+
+    async def add_labels(self, pr_number: int, labels: list[str]) -> None:
+        await self._request(
+            "POST",
+            f"{self._repo_path}/issues/{pr_number}/labels",
+            json={"labels": labels},
+        )
