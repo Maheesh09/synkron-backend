@@ -40,6 +40,7 @@ async def connect_db():
         await _ensure_index(db.pipeline_run_details, [("run_id", 1), ("doc_path", 1)], unique=True)
         await _ensure_index(db.repositories, [("webhook_token_hash", 1)])
         await _ensure_index(db.repositories, [("owner_uid", 1)])
+        await _ensure_index(db.webhook_deliveries, [("delivery_id", 1)], unique=True)
         
     except Exception as e:
         logger.error(f"MongoDB connection failed: {e}")

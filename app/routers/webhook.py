@@ -1,60 +1,103 @@
-from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Path
-from app.services.cloud_tasks import enqueue_pipeline, enqueue_feedback
+import hashlib
+import hmac
+import logging
+
+from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+from pymongo.errors import DuplicateKeyError
+
 from app.config import settings
+from app.services.cloud_tasks import enqueue_pipeline, enqueue_feedback
 from app.database import get_db
-import hashlib, logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/gitlab/{project_id}")
-async def gitlab_webhook(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    project_id: int = Path(...),
-):
-    db   = get_db()
-    repo = await db.repositories.find_one({"repo_id": project_id})
+def _verify_signature(body: bytes, signature_header: str) -> bool:
+    """
+    Verify a GitHub webhook's HMAC-SHA256 signature.
 
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not registered")
-
-    incoming_hash = hashlib.sha256(
-        request.headers.get("X-Gitlab-Token", "").encode()
+    GitHub signs the RAW request body with the App's webhook secret and sends
+    the result as "sha256=<hex>" in X-Hub-Signature-256. We recompute it over
+    the same bytes and compare in constant time, so an attacker can't recover
+    the correct value by measuring how long our comparison takes.
+    """
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    expected = "sha256=" + hmac.new(
+        settings.GITHUB_WEBHOOK_SECRET.encode(),
+        body,
+        hashlib.sha256,
     ).hexdigest()
+    return hmac.compare_digest(expected, signature_header)
 
-    if incoming_hash != repo.get("webhook_token_hash", ""):
-        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    payload = await request.json()
-    event   = request.headers.get("X-Gitlab-Event", "")
+async def _is_delivery_already_processed(delivery_id: str) -> bool:
+    """
+    Check if this GitHub webhook delivery has already been processed.
+    Uses atomic insert to avoid race conditions on concurrent deliveries.
+    Returns True if delivery was already seen, False if this is a new delivery.
+    """
+    db = get_db()
+    try:
+        from datetime import datetime
+        await db.webhook_deliveries.insert_one({
+            "delivery_id": delivery_id,
+            "processed_at": datetime.utcnow(),
+        })
+        # Successfully inserted = new delivery
+        return False
+    except DuplicateKeyError:
+        # Delivery ID already exists = duplicate/retry
+        return True
 
-    if event == "Push Hook":
-        if payload.get("total_commits_count", 0) == 0:
-            return {"status": "ignored", "reason": "no commits"}
+@router.post("/github")
+async def github_webhook(request: Request, background_tasks: BackgroundTasks):
+    body = await request.body()                       # raw bytes, for signature
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    if not _verify_signature(body, signature):
+        raise HTTPException(status_code=401, detail="Invalid signature")
 
-        commits = payload.get("commits",[])
+    event = request.headers.get("X-GitHub-Event", "")
+    delivery_id = request.headers.get("X-GitHub-Delivery", "")
+    payload = await request.json()                    # same bytes, now parsed
 
-    # Guard 1: commit was authored by synkron-bot (squash / fast-forward merge)
-        if any(c.get("author", {}).get("name") == "synkron-bot" for c in commits):
-            return {"status": "ignored", "reason": "synkron-bot authored commit"}
+    # GitHub pings the webhook once, right after you save it.
+    if event == "ping":
+        return {"status": "pong"}
 
-    # Guard 2: merge commit from a synkron/docs-* branch
-        if any("synkron/docs-" in c.get("message", "") for c in commits):
-         return {"status": "ignored", "reason": "synkron merge commit"}
+    # Idempotency: deduplicate webhooks using X-GitHub-Delivery header.
+    # GitHub retries failed webhooks and allows manual redelivery; without this
+    # check we'd create duplicate Cloud Tasks and PipelineRuns for the same commit.
+    if delivery_id:
+        if await _is_delivery_already_processed(delivery_id):
+            logger.info(f"Skipping duplicate delivery {delivery_id} for event {event}")
+            return {"status": "already_processed", "delivery_id": delivery_id}
 
-    # Guard 3: commit message tagged [synkron]
+    if event == "push":
+        return await _handle_push(payload, background_tasks, delivery_id)
 
-        if any("[synkron]" in c.get("message", "") for c in commits):
-         return {"status": "ignored", "reason": "synkron tagged commit"}
-        background_tasks.add_task(enqueue_pipeline, payload)
-        logger.info(f"Queued pipeline for repo {project_id}")
+    # pull_request (feedback) and installation events come in the next portion.
+    return {"status": "ignored", "reason": f"unhandled event: {event}"}
 
-    elif event == "Merge Request Hook":
-        action = payload.get("object_attributes", {}).get("action")
-        title  = payload.get("object_attributes", {}).get("title", "")
-        if action == "merge" and "Docs:" in title:
-            background_tasks.add_task(enqueue_feedback, payload)
 
+async def _handle_push(payload: dict, background_tasks: BackgroundTasks, delivery_id: str = "") -> dict:
+    repo = payload["repository"]
+    default_branch = repo["default_branch"]
+
+    # Only react to pushes that land on the default branch.
+    if payload.get("ref") != f"refs/heads/{default_branch}":
+        return {"status": "ignored", "reason": "not the default branch"}
+
+    commits = payload.get("commits", [])
+    if not commits:
+        return {"status": "ignored", "reason": "no commits"}
+
+    # Loop guard: never react to Synkron's own work. Its doc commits carry a
+    # [synkron] tag, so a merged docs PR won't re-trigger the pipeline.
+    if any("[synkron]" in c.get("message", "") for c in commits):
+        return {"status": "ignored", "reason": "synkron-authored commit"}
+
+    background_tasks.add_task(enqueue_pipeline, payload, delivery_id)
+    logger.info(f"Queued pipeline for {repo['full_name']} @ {payload['after'][:8]}")
     return {"status": "accepted"}
