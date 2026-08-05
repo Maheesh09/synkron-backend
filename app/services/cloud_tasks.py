@@ -20,7 +20,7 @@ async def _dispatch_local(endpoint: str, payload: dict):
                          headers={"X-Internal-Token": settings.INTERNAL_SECRET})
         logger.info(f"[LOCAL] {endpoint} -> {r.status_code} {r.text[:200]}")
 
-def _create_task(endpoint: str, payload: dict) -> str:
+def _create_task(endpoint: str, payload: dict, task_name: str = None) -> str:
     from google.cloud import tasks_v2
     from google.protobuf import duration_pb2
     client = _get_client()
@@ -37,9 +37,16 @@ def _create_task(endpoint: str, payload: dict) -> str:
         # Give the task time to run the full agent pipeline (default is 10 min).
         "dispatch_deadline": duration_pb2.Duration(seconds=600),
     }
+    # Optional task name for deduplication. Cloud Tasks deduplicates by name
+    # for ~1 hour after creation/completion, providing additional protection
+    # against webhook redeliveries that slip through our DB check.
+    if task_name:
+        task["name"] = client.task_path(
+            settings.GOOGLE_CLOUD_PROJECT, settings.GCP_REGION,
+            "synkron-pipeline-queue", task_name)
     return client.create_task(parent=queue_path, task=task).name
 
-async def enqueue_pipeline(payload: dict):
+async def enqueue_pipeline(payload: dict, delivery_id: str = ""):
     if settings.LOCAL_DEV:
         import asyncio
         from app.agents.orchestrator import run_pipeline
@@ -53,7 +60,10 @@ async def enqueue_pipeline(payload: dict):
             )
         )
         return
-    logger.info(f"Pipeline task created: {_create_task('run-pipeline', payload)}")
+    # Use delivery_id as Cloud Task name for built-in deduplication (~1 hour window).
+    # Task names must be alphanumeric + hyphens, so prefix the delivery ID (which is a UUID).
+    task_name = f"gh-{delivery_id}" if delivery_id else None
+    logger.info(f"Pipeline task created: {_create_task('run-pipeline', payload, task_name)}")
 
 async def enqueue_feedback(payload: dict):
     if settings.LOCAL_DEV:

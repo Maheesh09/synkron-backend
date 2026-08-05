@@ -3,9 +3,11 @@ import hmac
 import logging
 
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+from pymongo.errors import DuplicateKeyError
 
 from app.config import settings
 from app.services.cloud_tasks import enqueue_pipeline, enqueue_feedback
+from app.database import get_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -29,6 +31,26 @@ def _verify_signature(body: bytes, signature_header: str) -> bool:
     ).hexdigest()
     return hmac.compare_digest(expected, signature_header)
 
+
+async def _is_delivery_already_processed(delivery_id: str) -> bool:
+    """
+    Check if this GitHub webhook delivery has already been processed.
+    Uses atomic insert to avoid race conditions on concurrent deliveries.
+    Returns True if delivery was already seen, False if this is a new delivery.
+    """
+    db = get_db()
+    try:
+        from datetime import datetime
+        await db.webhook_deliveries.insert_one({
+            "delivery_id": delivery_id,
+            "processed_at": datetime.utcnow(),
+        })
+        # Successfully inserted = new delivery
+        return False
+    except DuplicateKeyError:
+        # Delivery ID already exists = duplicate/retry
+        return True
+
 @router.post("/github")
 async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.body()                       # raw bytes, for signature
@@ -37,20 +59,29 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
     event = request.headers.get("X-GitHub-Event", "")
+    delivery_id = request.headers.get("X-GitHub-Delivery", "")
     payload = await request.json()                    # same bytes, now parsed
 
     # GitHub pings the webhook once, right after you save it.
     if event == "ping":
         return {"status": "pong"}
 
+    # Idempotency: deduplicate webhooks using X-GitHub-Delivery header.
+    # GitHub retries failed webhooks and allows manual redelivery; without this
+    # check we'd create duplicate Cloud Tasks and PipelineRuns for the same commit.
+    if delivery_id:
+        if await _is_delivery_already_processed(delivery_id):
+            logger.info(f"Skipping duplicate delivery {delivery_id} for event {event}")
+            return {"status": "already_processed", "delivery_id": delivery_id}
+
     if event == "push":
-        return await _handle_push(payload, background_tasks)
+        return await _handle_push(payload, background_tasks, delivery_id)
 
     # pull_request (feedback) and installation events come in the next portion.
     return {"status": "ignored", "reason": f"unhandled event: {event}"}
 
 
-async def _handle_push(payload: dict, background_tasks: BackgroundTasks) -> dict:
+async def _handle_push(payload: dict, background_tasks: BackgroundTasks, delivery_id: str = "") -> dict:
     repo = payload["repository"]
     default_branch = repo["default_branch"]
 
@@ -67,6 +98,6 @@ async def _handle_push(payload: dict, background_tasks: BackgroundTasks) -> dict
     if any("[synkron]" in c.get("message", "") for c in commits):
         return {"status": "ignored", "reason": "synkron-authored commit"}
 
-    background_tasks.add_task(enqueue_pipeline, payload)
+    background_tasks.add_task(enqueue_pipeline, payload, delivery_id)
     logger.info(f"Queued pipeline for {repo['full_name']} @ {payload['after'][:8]}")
     return {"status": "accepted"}
