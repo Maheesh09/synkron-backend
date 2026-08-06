@@ -4,6 +4,7 @@ import logging
 
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
 from pymongo.errors import DuplicateKeyError
+from pytz import timezone
 
 from app.config import settings
 from app.services.cloud_tasks import enqueue_pipeline, enqueue_feedback
@@ -43,7 +44,7 @@ async def _is_delivery_already_processed(delivery_id: str) -> bool:
         from datetime import datetime
         await db.webhook_deliveries.insert_one({
             "delivery_id": delivery_id,
-            "processed_at": datetime.utcnow(),
+            "processed_at": datetime.now(timezone.utc),
         })
         # Successfully inserted = new delivery
         return False
