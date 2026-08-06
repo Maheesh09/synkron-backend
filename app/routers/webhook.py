@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
 from pymongo.errors import DuplicateKeyError
@@ -40,10 +41,9 @@ async def _is_delivery_already_processed(delivery_id: str) -> bool:
     """
     db = get_db()
     try:
-        from datetime import datetime
         await db.webhook_deliveries.insert_one({
             "delivery_id": delivery_id,
-            "processed_at": datetime.utcnow(),
+            "processed_at": datetime.now(timezone.utc),
         })
         # Successfully inserted = new delivery
         return False
@@ -77,7 +77,10 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     if event == "push":
         return await _handle_push(payload, background_tasks, delivery_id)
 
-    # pull_request (feedback) and installation events come in the next portion.
+    if event == "pull_request":
+        return await _handle_pull_request(payload, background_tasks)
+
+    # installation events come in the next portion.
     return {"status": "ignored", "reason": f"unhandled event: {event}"}
 
 
@@ -100,4 +103,33 @@ async def _handle_push(payload: dict, background_tasks: BackgroundTasks, deliver
 
     background_tasks.add_task(enqueue_pipeline, payload, delivery_id)
     logger.info(f"Queued pipeline for {repo['full_name']} @ {payload['after'][:8]}")
+    return {"status": "accepted"}
+
+async def _handle_pull_request(payload: dict, background_tasks: BackgroundTasks) -> dict:
+
+    pr = payload.get("pull_request", {})
+
+    # Only care about a PR that was actually merged (closed + merged == True).
+    if payload.get("action") != "closed" or not pr.get("merged"):
+        return {"status": "ignored", "reason": "PR not merged"}
+
+    # And only Synkron's own docs PRs — identified by the branch we created,
+    # not by the title. A human can't accidentally trip this.
+    head_ref = pr.get("head", {}).get("ref", "")
+    if not head_ref.startswith("synkron/docs-"):
+        return {"status": "ignored", "reason": "not a synkron docs PR"}
+
+    # Transform GitHub payload to format expected by downstream feedback processing.
+    # The feedback service expects GitLab-style keys (project.id, object_attributes.iid),
+    # but GitHub provides repository.id and pull_request.number instead.
+    adapted_payload = {
+        "project": {
+            "id": payload.get("repository", {}).get("id")
+        },
+        "object_attributes": {
+            "iid": pr.get("number")
+        }
+    }
+    background_tasks.add_task(enqueue_feedback, adapted_payload)
+    logger.info(f"Queued feedback for merged docs PR #{pr.get('number')}")
     return {"status": "accepted"}
