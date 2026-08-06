@@ -119,17 +119,6 @@ async def _handle_pull_request(payload: dict, background_tasks: BackgroundTasks)
     if not head_ref.startswith("synkron/docs-"):
         return {"status": "ignored", "reason": "not a synkron docs PR"}
 
-    # Transform GitHub payload to format expected by downstream feedback processing.
-    # The feedback service expects GitLab-style keys (project.id, object_attributes.iid),
-    # but GitHub provides repository.id and pull_request.number instead.
-    adapted_payload = {
-        "project": {
-            "id": payload.get("repository", {}).get("id")
-        },
-        "object_attributes": {
-            "iid": pr.get("number")
-        }
-    }
-    background_tasks.add_task(enqueue_feedback, adapted_payload)
+    background_tasks.add_task(enqueue_feedback, payload)
     logger.info(f"Queued feedback for merged docs PR #{pr.get('number')}")
     return {"status": "accepted"}
