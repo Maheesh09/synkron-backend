@@ -62,8 +62,11 @@ async def enqueue_pipeline(payload: dict, delivery_id: str = ""):
         return
     # Use delivery_id as Cloud Task name for built-in deduplication (~1 hour window).
     # Task names must be alphanumeric + hyphens, so prefix the delivery ID (which is a UUID).
-    task_name = f"gh-{delivery_id}" if delivery_id else None
-    logger.info(f"Pipeline task created: {_create_task('run-pipeline', payload, task_name)}")
+    # Dispatch synchronous Cloud Tasks API call to thread pool to avoid blocking event loop
+    import asyncio
+    task_name_template = f"gh-{delivery_id}" if delivery_id else None
+    task_name_created = await asyncio.to_thread(_create_task, 'run-pipeline', payload, task_name_template)
+    logger.info(f"Pipeline task created: {task_name_created}")
 
 async def enqueue_feedback(payload: dict):
     if settings.LOCAL_DEV:
@@ -72,4 +75,7 @@ async def enqueue_feedback(payload: dict):
         logger.info("[LOCAL] Executing feedback process directly in background task")
         asyncio.create_task(process_feedback(payload))
         return
-    logger.info(f"Feedback task created: {_create_task('process-feedback', payload)}")
+    # Dispatch synchronous Cloud Tasks API call to thread pool to avoid blocking event loop
+    import asyncio
+    task_name = await asyncio.to_thread(_create_task, 'process-feedback', payload)
+    logger.info(f"Feedback task created: {task_name}")

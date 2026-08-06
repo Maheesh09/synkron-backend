@@ -1,10 +1,10 @@
 import hashlib
 import hmac
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
 from pymongo.errors import DuplicateKeyError
-from pytz import timezone
 
 from app.config import settings
 from app.services.cloud_tasks import enqueue_pipeline, enqueue_feedback
@@ -41,7 +41,6 @@ async def _is_delivery_already_processed(delivery_id: str) -> bool:
     """
     db = get_db()
     try:
-        from datetime import datetime
         await db.webhook_deliveries.insert_one({
             "delivery_id": delivery_id,
             "processed_at": datetime.now(timezone.utc),
@@ -120,6 +119,17 @@ async def _handle_pull_request(payload: dict, background_tasks: BackgroundTasks)
     if not head_ref.startswith("synkron/docs-"):
         return {"status": "ignored", "reason": "not a synkron docs PR"}
 
-    background_tasks.add_task(enqueue_feedback, payload)
+    # Transform GitHub payload to format expected by downstream feedback processing.
+    # The feedback service expects GitLab-style keys (project.id, object_attributes.iid),
+    # but GitHub provides repository.id and pull_request.number instead.
+    adapted_payload = {
+        "project": {
+            "id": payload.get("repository", {}).get("id")
+        },
+        "object_attributes": {
+            "iid": pr.get("number")
+        }
+    }
+    background_tasks.add_task(enqueue_feedback, adapted_payload)
     logger.info(f"Queued feedback for merged docs PR #{pr.get('number')}")
     return {"status": "accepted"}
