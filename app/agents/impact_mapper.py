@@ -1,4 +1,4 @@
-from app.services.gitlab_mcp import GitLabMCP
+from app.services.github import GitHubClient
 from app.services.gemini import call_gemini
 import json, asyncio, logging
 
@@ -10,13 +10,12 @@ MAX_DOCS            = 12
 
 
 class ImpactMapperAgent:
-    def __init__(self, repo_id: int, analysis: dict):
-        self.repo_id  = repo_id
+    def __init__(self, client: GitHubClient, analysis: dict):
+        self.client   = client
         self.analysis = analysis
-        self.mcp      = GitLabMCP()
 
     async def run(self) -> dict:
-        all_files = await self.mcp.list_repository_tree(self.repo_id)
+        all_files = await self.client.list_repository_tree()
 
         # Filter to doc files only
         doc_files = [
@@ -41,9 +40,9 @@ class ImpactMapperAgent:
         if not doc_files:
             return {"affected_docs": []}
 
-        # Read all doc files concurrently via GitLab MCP
+        # Read all doc files concurrently via GitHub API
         contents = await asyncio.gather(*[
-            self.mcp.get_file_content(self.repo_id, f["path"])
+            self.client.get_file_content(f["path"])
             for f in doc_files
         ], return_exceptions=True)
 
