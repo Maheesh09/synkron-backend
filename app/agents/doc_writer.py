@@ -1,4 +1,4 @@
-from app.services.gitlab_mcp import GitLabMCP
+from app.services.github import GitHubClient
 from app.services.gemini import call_gemini
 from app.database import get_db
 from typing import List
@@ -8,11 +8,10 @@ logger = logging.getLogger(__name__)
 
 
 class DocWriterAgent:
-    def __init__(self, repo_id: int, impact: dict, analysis: dict):
-        self.repo_id  = repo_id
+    def __init__(self, client: GitHubClient, impact: dict, analysis: dict):
+        self.client   = client
         self.impact   = impact
         self.analysis = analysis
-        self.mcp      = GitLabMCP()
 
     async def run(self) -> List[dict]:
         updates = []
