@@ -15,7 +15,7 @@ class ImpactMapperAgent:
         self.analysis = analysis
 
     async def run(self) -> dict:
-        all_files = await self.client.list_repository_tree()
+        all_files = await self.client.list_tree()
 
         # Filter to doc files only
         doc_files = [

@@ -117,6 +117,16 @@ class GitHubClient:
         resp = await self._request("GET", f"{self._repo_path}/git/ref/heads/{escaped_branch}")
         return resp.json()["object"]["sha"]
 
+    async def branch_exists(self, branch: str) -> bool:
+        """Check if a branch exists."""
+        try:
+            await self.get_branch_head(branch)
+            return True
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return False
+            raise
+
     async def create_branch(self, new_branch: str, base: str | None = None) -> str:
         """
         Create a branch off `base` (default branch if omitted). Git has no
@@ -229,3 +239,37 @@ class GitHubClient:
             f"{self._repo_path}/issues/{pr_number}/labels",
             json={"labels": labels},
         )
+
+    async def find_pull_request(self, head_branch: str, base: str | None = None) -> dict | None:
+        """
+        Find an open PR from head_branch into base (default branch if omitted).
+        Returns the PR dict if found, None otherwise.
+        """
+        base = base or self.default_branch
+        resp = await self._request(
+            "GET",
+            f"{self._repo_path}/pulls",
+            params={"head": f"{self.owner}:{head_branch}", "base": base, "state": "open"},
+        )
+        prs = resp.json()
+        return prs[0] if prs else None
+
+    async def get_branch_author(self, branch: str) -> str | None:
+        """
+        Get the author login of the latest commit on a branch.
+        Returns None if the branch doesn't exist or has no commits.
+        """
+        try:
+            head_sha = await self.get_branch_head(branch)
+            resp = await self._request("GET", f"{self._repo_path}/commits/{head_sha}")
+            commit_data = resp.json()
+            # Check if commit was made by the bot (the app itself)
+            # GitHub Apps show up as author.type == "Bot"
+            author = commit_data.get("author")
+            if author and author.get("type") == "Bot":
+                return author.get("login")
+            return None
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise

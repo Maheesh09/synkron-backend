@@ -18,9 +18,24 @@ class PRCreatorAgent:
     async def run(self) -> dict:
         branch = f"synkron/docs-{self.commit_sha[:8]}"
 
-        # Step 1: branch off the default branch
-        await self.client.create_branch(branch)
-        logger.info(f"Created branch: {branch}")
+        # Step 1: Check if branch already exists and verify it's ours
+        # This makes the workflow resumable if a previous run failed partway
+        if await self.client.branch_exists(branch):
+            author = await self.client.get_branch_author(branch)
+            # Only reuse if the branch was created by this bot (Synkron)
+            # GitHub Apps appear with type="Bot" in the author field
+            if author and "[bot]" in author.lower():
+                logger.info(f"Reusing existing Synkron branch: {branch}")
+            else:
+                # Branch exists but wasn't created by us - fail safely
+                raise RuntimeError(
+                    f"Branch '{branch}' already exists but wasn't created by Synkron. "
+                    "Cannot safely reuse it."
+                )
+        else:
+            # Create new branch off the default branch
+            await self.client.create_branch(branch)
+            logger.info(f"Created branch: {branch}")
 
         # Step 2: commit every updated doc in ONE atomic commit.
         # The [synkron] tag is what the push webhook guard keys on to avoid looping.
@@ -49,13 +64,19 @@ Format as clean markdown. Professional and concise."""
 
         description = await call_gemini(desc_prompt, model="flash", temperature=0.3)
 
-        # Step 4: open the PR
-        summary_short = self.analysis["summary"][:65]
-        pr = await self.client.create_pull_request(
-            head_branch=branch,
-            title=f"Docs: {summary_short}",
-            body=description,
-        )
+        # Step 4: Check if PR already exists before creating another
+        existing_pr = await self.client.find_pull_request(branch)
+        if existing_pr:
+            logger.info(f"PR already exists: {existing_pr['html_url']}")
+            pr = {"url": existing_pr["html_url"], "number": existing_pr["number"]}
+        else:
+            # Open a new PR
+            summary_short = self.analysis["summary"][:65]
+            pr = await self.client.create_pull_request(
+                head_branch=branch,
+                title=f"Docs: {summary_short}",
+                body=description,
+            )
 
         # Optional labels — guarded, because a label missing from the repo returns
         # 422, and a cosmetic label must never break PR creation.
