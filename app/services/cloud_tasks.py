@@ -51,11 +51,18 @@ async def enqueue_pipeline(payload: dict, delivery_id: str = ""):
         import asyncio
         from app.agents.orchestrator import run_pipeline
         logger.info("[LOCAL] Executing pipeline directly in background task")
+
+        # Extract repo_id from GitHub payload
+        repo_id = payload.get("repository", {}).get("id")
+        if not repo_id:
+            logger.error("Missing repository.id in GitHub payload")
+            return
+
         asyncio.create_task(
             run_pipeline(
                 before_sha=payload.get("before"),
                 after_sha=payload.get("after"),
-                repo_id=payload.get("project", {}).get("id"),
+                repo_id=repo_id,
                 payload=payload
             )
         )

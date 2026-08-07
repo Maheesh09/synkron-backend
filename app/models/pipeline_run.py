@@ -28,6 +28,7 @@ class PipelineRun(BaseModel):
 
 class CorrectionPattern(BaseModel):
     repo_id:          int
+    repo_key:         Optional[str] = None  # Added for GitHub: "owner/repo" format
     mr_id:            int
     doc_path:         str
     doc_type:         str

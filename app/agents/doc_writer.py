@@ -1,4 +1,4 @@
-from app.services.gitlab_mcp import GitLabMCP
+from app.services.github import GitHubClient
 from app.services.gemini import call_gemini
 from app.database import get_db
 from typing import List
@@ -8,11 +8,10 @@ logger = logging.getLogger(__name__)
 
 
 class DocWriterAgent:
-    def __init__(self, repo_id: int, impact: dict, analysis: dict):
-        self.repo_id  = repo_id
+    def __init__(self, client: GitHubClient, impact: dict, analysis: dict):
+        self.client   = client
         self.impact   = impact
         self.analysis = analysis
-        self.mcp      = GitLabMCP()
 
     async def run(self) -> List[dict]:
         updates = []
@@ -27,13 +26,16 @@ class DocWriterAgent:
         return updates
 
     async def _rewrite_doc(self, doc: dict):
-        current  = await self.mcp.get_file_content(self.repo_id, doc["path"])
+        current  = await self.client.get_file_content(doc["path"])
         doc_type = self._classify_doc(doc["path"])
 
         # Pull past correction examples from MongoDB (feedback loop)
+        # Query by the stable string key (owner/repo) that we now store in repo_key field.
+        # For backward compatibility, we also check the legacy numeric repo_id field.
+        repo_key = f"{self.client.owner}/{self.client.repo}"
         db       = get_db()
         examples = await db.correction_patterns.find(
-            {"repo_id": self.repo_id, "doc_type": doc_type}
+            {"$or": [{"repo_key": repo_key}, {"repo_id": repo_key}], "doc_type": doc_type}
         ).sort("created_at", -1).limit(2).to_list(length=2)
 
         few_shot = ""
