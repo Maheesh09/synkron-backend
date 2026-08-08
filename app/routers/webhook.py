@@ -187,7 +187,10 @@ async def _handle_installation_repositories(payload: dict) -> dict:
     if action == "removed":
         removed = payload.get("repositories_removed", [])
         ids = [r["id"] for r in removed]
-        result = await db.repositories.delete_many({"repo_id": {"$in": ids}})
+        result = await db.repositories.delete_many({
+            "repo_id": {"$in": ids},
+            "installation_id": installation_id,
+        })
         return {"status": "accepted", "removed": result.deleted_count}
 
     return {"status": "ignored", "reason": f"installation_repositories action: {action}"}   
