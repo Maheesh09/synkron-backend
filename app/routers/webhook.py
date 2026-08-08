@@ -80,6 +80,12 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     if event == "pull_request":
         return await _handle_pull_request(payload, background_tasks)
 
+    if event == "installation":
+        return await _handle_installation(payload)
+
+    if event == "installation_repositories":
+        return await _handle_installation_repositories(payload)
+
     # installation events come in the next portion.
     return {"status": "ignored", "reason": f"unhandled event: {event}"}
 
@@ -122,3 +128,66 @@ async def _handle_pull_request(payload: dict, background_tasks: BackgroundTasks)
     background_tasks.add_task(enqueue_feedback, payload)
     logger.info(f"Queued feedback for merged docs PR #{pr.get('number')}")
     return {"status": "accepted"}
+
+
+async def _upsert_repos(db, repos, installation_id, account_id, account_login):
+    for r in repos:
+        await db.repositories.update_one(
+            {"repo_id": r["id"]},
+            {"$set": {
+                "repo_id":         r["id"],
+                "full_name":       r["full_name"],
+                "name":            r["name"],
+                "owner":           account_login,
+                "account_id":      account_id,
+                "installation_id": installation_id,
+            }},
+            upsert=True,
+        )
+
+
+async def _handle_installation(payload: dict) -> dict:
+    action          = payload.get("action")
+    installation    = payload.get("installation", {})
+    installation_id = installation.get("id")
+    account         = installation.get("account", {})
+    account_id      = account.get("id")
+    account_login   = account.get("login")
+    db = get_db()
+
+    if action == "created":
+        repos = payload.get("repositories", [])
+        await _upsert_repos(db, repos, installation_id, account_id, account_login)
+        logger.info(f"Installation {installation_id} created for {account_login} ({len(repos)} repos)")
+        return {"status": "accepted", "repos": len(repos)}
+
+    if action == "deleted":
+        result = await db.repositories.delete_many({"installation_id": installation_id})
+        logger.info(f"Installation {installation_id} deleted; removed {result.deleted_count} repos")
+        return {"status": "accepted", "removed": result.deleted_count}
+
+    # suspend / unsuspend / new_permissions_accepted — no-op for now
+    return {"status": "ignored", "reason": f"installation action: {action}"}     
+
+
+async def _handle_installation_repositories(payload: dict) -> dict:
+    action          = payload.get("action")
+    installation    = payload.get("installation", {})
+    installation_id = installation.get("id")
+    account         = installation.get("account", {})
+    account_id      = account.get("id")
+    account_login   = account.get("login")
+    db = get_db()
+
+    if action == "added":
+        repos = payload.get("repositories_added", [])
+        await _upsert_repos(db, repos, installation_id, account_id, account_login)
+        return {"status": "accepted", "added": len(repos)}
+
+    if action == "removed":
+        removed = payload.get("repositories_removed", [])
+        ids = [r["id"] for r in removed]
+        result = await db.repositories.delete_many({"repo_id": {"$in": ids}})
+        return {"status": "accepted", "removed": result.deleted_count}
+
+    return {"status": "ignored", "reason": f"installation_repositories action: {action}"}   
