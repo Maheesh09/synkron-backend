@@ -24,3 +24,25 @@ async def get_current_uid(authorization: str = Header(None)) -> str:
     if not uid:
         raise HTTPException(status_code=401, detail="Authentication token has no user id")
     return uid
+
+async def get_current_github_id(authorization: str = Header(None)) -> int:
+    """Verify the Firebase ID token and return the user's GitHub numeric id.
+
+    When a user signs in with the GitHub provider, Firebase records their GitHub
+    identity in the token. That numeric id equals installation.account.id from
+    the install webhook, so it's how we scope a user to their installed repos.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authentication token")
+
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        decoded = firebase_auth.verify_id_token(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired authentication token")
+
+    identities = decoded.get("firebase", {}).get("identities", {})
+    github_ids = identities.get("github.com")
+    if not github_ids:
+        raise HTTPException(status_code=403, detail="GitHub sign-in required")
+    return int(github_ids[0])    
