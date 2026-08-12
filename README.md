@@ -1,12 +1,10 @@
-# Synkron — Backend
+# Synkron - Backend
 
 > Push code. Merge docs.
 
 Synkron is an AI agent that keeps documentation honest. Every time a developer pushes code to a GitLab repository, Synkron reads the diff, figures out which documentation files are now wrong, rewrites only the affected sections, and opens a merge request with the fix. Nobody has to remember to update the README. The merge request simply shows up.
 
 This repository is the backend service: a FastAPI application that receives GitLab push webhooks, runs the documentation pipeline, and serves the dashboard API used by the frontend.
-
-Built for the [Google Cloud Rapid Agent Hackathon](https://rapid-agent.devpost.com) — GitLab track.
 
 ---
 
