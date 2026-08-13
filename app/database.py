@@ -10,7 +10,7 @@ async def _ensure_index(coll, keys, **opts):
         await coll.create_index(keys, **opts)
     except OperationFailure as e:
         if e.code == 86:  # IndexKeySpecsConflict: same name, different options
-            logger.warning(f"Index {keys} already exists with different options - skipping")
+            logging.warning(f"Index {keys} already exists with different options - skipping")
         else:
             raise
 
@@ -26,13 +26,27 @@ db: AsyncIOMotorDatabase = None
 
 async def connect_db():
     global client, db
+    # Build the client and bind the db first. serverSelectionTimeoutMS caps how
+    # long any call waits for the server, so a down Atlas fails in seconds rather
+    # than the 30s default, which would blow Cloud Run's startup probe.
     try:
-        client = AsyncIOMotorClient(settings.MONGODB_URI)
+        client = AsyncIOMotorClient(settings.MONGODB_URI, serverSelectionTimeoutMS=5000)
         db = client[settings.MONGODB_DB_NAME]
-        await client.admin.command("ping")
-        logger.info("MongoDB connected")
+    except Exception as e:
+        logging.exception(f"Failed to build MongoDB client, booting without a database: {e}")
+        return
 
-        # Create indexes
+    # Verify reachability. If Mongo is down we still boot — db stays bound, so it
+    # reconnects lazily on the first query once Atlas is reachable again.
+    try:
+        await client.admin.command("ping")
+        logging.info("MongoDB connected")
+    except Exception as e:
+        logging.exception(f"MongoDB unreachable at startup, booting anyway (will retry on use): {e}")
+        return
+
+    # Connected — ensure indexes, best-effort so an index hiccup can't crash boot.
+    try:
         await _ensure_index(db.pipeline_runs, [("repo_id", 1), ("created_at", -1)])
         await _ensure_index(db.pipeline_runs, [("mr_id", 1)])
         await _ensure_index(db.correction_patterns, [("repo_id", 1), ("doc_type", 1), ("created_at", -1)])
@@ -41,10 +55,8 @@ async def connect_db():
         await _ensure_index(db.repositories, [("webhook_token_hash", 1)])
         await _ensure_index(db.repositories, [("owner_uid", 1)])
         await _ensure_index(db.webhook_deliveries, [("delivery_id", 1)], unique=True)
-        
     except Exception as e:
-        logger.error(f"MongoDB connection failed: {e}")
-        raise
+        logging.exception(f"Index creation failed (non-fatal): {e}")
 
 
 async def disconnect_db():
