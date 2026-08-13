@@ -1,33 +1,25 @@
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends
 from app.agents.orchestrator import run_pipeline
 from app.services.feedback import process_feedback
-from app.config import settings
+from app.security import require_internal_token
+from app.models.payloads import RunPipelinePayload, FeedbackPayload
 
 router = APIRouter()
 
 
-@router.post("/run-pipeline")
-async def run_pipeline_endpoint(payload: dict, x_internal_token: str = Header(None)):
-    if x_internal_token != settings.INTERNAL_SECRET:
-        raise HTTPException(status_code=403)
-
-    # Extract repo_id from GitHub payload
-    repo_id = payload.get("repository", {}).get("id")
-    if not repo_id:
-        raise HTTPException(status_code=400, detail="Missing repository.id in payload")
-
+@router.post("/run-pipeline", dependencies=[Depends(require_internal_token)])
+async def run_pipeline_endpoint(payload: RunPipelinePayload):
+    data = payload.model_dump()
     result = await run_pipeline(
-        before_sha=payload.get("before"),
-        after_sha=payload["after"],
-        repo_id=repo_id,
-        payload=payload
+        before_sha=data.get("before"),
+        after_sha=data["after"],
+        repo_id=data["repository"]["id"],
+        payload=data,
     )
-    return {"status": "completed", "mr_url": result.get("mr_url")}
+    return {"status": result.get("status", "completed"), "mr_url": result.get("mr_url")}
 
 
-@router.post("/process-feedback")
-async def process_feedback_endpoint(payload: dict, x_internal_token: str = Header(None)):
-    if x_internal_token != settings.INTERNAL_SECRET:
-        raise HTTPException(status_code=403)
-    await process_feedback(payload)
+@router.post("/process-feedback", dependencies=[Depends(require_internal_token)])
+async def process_feedback_endpoint(payload: FeedbackPayload):
+    await process_feedback(payload.model_dump())
     return {"status": "processed"}

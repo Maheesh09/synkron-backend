@@ -4,8 +4,6 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     # GitLab (legacy — removed once the GitHub migration is complete)
-    GITLAB_WEBHOOK_SECRET: str
-    GITLAB_PAT: str
 
     # GitHub App
     # The App's identifier used as the JWT issuer. The numeric App ID works;
@@ -38,6 +36,9 @@ class Settings(BaseSettings):
 
     # Firebase Authentication — project that mints the user ID tokens.
     FIREBASE_PROJECT_ID: str = ""
+
+    # CORS
+    CORS_ALLOWED_ORIGINS: str = ""
 
     class Config:
         env_file = ".env"

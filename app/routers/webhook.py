@@ -69,10 +69,9 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     # Idempotency: deduplicate webhooks using X-GitHub-Delivery header.
     # GitHub retries failed webhooks and allows manual redelivery; without this
     # check we'd create duplicate Cloud Tasks and PipelineRuns for the same commit.
-    if delivery_id:
-        if await _is_delivery_already_processed(delivery_id):
-            logger.info(f"Skipping duplicate delivery {delivery_id} for event {event}")
-            return {"status": "already_processed", "delivery_id": delivery_id}
+    if delivery_id and await _is_delivery_already_processed(delivery_id):
+        logger.info(f"Skipping duplicate delivery {delivery_id} for event {event}")
+        return {"status": "already_processed", "delivery_id": delivery_id}
 
     if event == "push":
         return await _handle_push(payload, background_tasks, delivery_id)
@@ -90,7 +89,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     return {"status": "ignored", "reason": f"unhandled event: {event}"}
 
 
-async def _handle_push(payload: dict, background_tasks: BackgroundTasks, delivery_id: str = "") -> dict:
+def _handle_push(payload: dict, background_tasks: BackgroundTasks, delivery_id: str = "") -> dict:
     repo = payload["repository"]
     default_branch = repo["default_branch"]
 
@@ -111,7 +110,7 @@ async def _handle_push(payload: dict, background_tasks: BackgroundTasks, deliver
     logger.info(f"Queued pipeline for {repo['full_name']} @ {payload['after'][:8]}")
     return {"status": "accepted"}
 
-async def _handle_pull_request(payload: dict, background_tasks: BackgroundTasks) -> dict:
+def _handle_pull_request(payload: dict, background_tasks: BackgroundTasks) -> dict:
 
     pr = payload.get("pull_request", {})
 
