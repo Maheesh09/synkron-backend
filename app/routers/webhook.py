@@ -3,7 +3,7 @@ import hmac
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Request, HTTPException
 from pymongo.errors import DuplicateKeyError
 
 from app.config import settings
@@ -51,8 +51,28 @@ async def _is_delivery_already_processed(delivery_id: str) -> bool:
         # Delivery ID already exists = duplicate/retry
         return True
 
+async def _safe_enqueue(enqueue_coro, delivery_id: str):
+    """
+    Run the enqueue synchronously so the Cloud Task is created BEFORE we answer
+    GitHub. A FastAPI background task can be killed when Cloud Run freezes the
+    instance right after the response, silently dropping the event. If the
+    enqueue fails, release the idempotency claim so GitHub's retry isn't seen as
+    a duplicate, then return 503 so GitHub actually retries.
+    """
+    try:
+        await enqueue_coro
+    except Exception as e:
+        logging.exception(f"Enqueue failed (delivery {delivery_id}): {e}")
+        if delivery_id:
+            try:
+                await get_db().webhook_deliveries.delete_one({"delivery_id": delivery_id})
+            except Exception:
+                pass
+        raise HTTPException(status_code=503, detail="Enqueue failed; GitHub will retry")
+        
+
 @router.post("/github")
-async def github_webhook(request: Request, background_tasks: BackgroundTasks):
+async def github_webhook(request: Request):
     body = await request.body()                       # raw bytes, for signature
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not _verify_signature(body, signature):
@@ -74,10 +94,10 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         return {"status": "already_processed", "delivery_id": delivery_id}
 
     if event == "push":
-        return await _handle_push(payload, background_tasks, delivery_id)
+        return await _handle_push(payload, delivery_id)
 
     if event == "pull_request":
-        return await _handle_pull_request(payload, background_tasks)
+        return await _handle_pull_request(payload, delivery_id)
 
     if event == "installation":
         return await _handle_installation(payload)
@@ -89,7 +109,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     return {"status": "ignored", "reason": f"unhandled event: {event}"}
 
 
-def _handle_push(payload: dict, background_tasks: BackgroundTasks, delivery_id: str = "") -> dict:
+async def _handle_push(payload: dict, delivery_id: str = "") -> dict:
     repo = payload["repository"]
     default_branch = repo["default_branch"]
 
@@ -106,11 +126,11 @@ def _handle_push(payload: dict, background_tasks: BackgroundTasks, delivery_id: 
     if any("[synkron]" in c.get("message", "") for c in commits):
         return {"status": "ignored", "reason": "synkron-authored commit"}
 
-    background_tasks.add_task(enqueue_pipeline, payload, delivery_id)
+    await _safe_enqueue(enqueue_pipeline(payload, delivery_id), delivery_id)
     logger.info(f"Queued pipeline for {repo['full_name']} @ {payload['after'][:8]}")
     return {"status": "accepted"}
 
-def _handle_pull_request(payload: dict, background_tasks: BackgroundTasks) -> dict:
+async def _handle_pull_request(payload: dict, delivery_id: str = "") -> dict:
 
     pr = payload.get("pull_request", {})
 
@@ -124,7 +144,7 @@ def _handle_pull_request(payload: dict, background_tasks: BackgroundTasks) -> di
     if not head_ref.startswith("synkron/docs-"):
         return {"status": "ignored", "reason": "not a synkron docs PR"}
 
-    background_tasks.add_task(enqueue_feedback, payload)
+    await _safe_enqueue(enqueue_feedback(payload), delivery_id)
     logger.info(f"Queued feedback for merged docs PR #{pr.get('number')}")
     return {"status": "accepted"}
 
