@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # CORS
     CORS_ALLOWED_ORIGINS: str = ""
 
-    RATE_LIMIT_PER_HOUR: int = 10
+    RATE_LIMIT_PER_HOUR: int = 20
 
     class Config:
         env_file = ".env"
