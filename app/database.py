@@ -10,7 +10,7 @@ async def _ensure_index(coll, keys, **opts):
         await coll.create_index(keys, **opts)
     except OperationFailure as e:
         if e.code == 86:  # IndexKeySpecsConflict: same name, different options
-            logger.warning(f"Index {keys} already exists with different options — skipping")
+            logger.warning(f"Index {keys} already exists with different options - skipping")
         else:
             raise
 
