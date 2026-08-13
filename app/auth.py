@@ -10,7 +10,7 @@ from fastapi import Header, HTTPException
 from firebase_admin import auth as firebase_auth
 
 
-async def get_current_uid(authorization: str = Header(None)) -> str:
+def get_current_uid(authorization: str = Header(None)) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing authentication token")
 
@@ -25,7 +25,7 @@ async def get_current_uid(authorization: str = Header(None)) -> str:
         raise HTTPException(status_code=401, detail="Authentication token has no user id")
     return uid
 
-async def get_current_github_id(authorization: str = Header(None)) -> int:
+def get_current_github_id(authorization: str = Header(None)) -> int:
     """Verify the Firebase ID token and return the user's GitHub numeric id.
 
     When a user signs in with the GitHub provider, Firebase records their GitHub

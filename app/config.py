@@ -4,8 +4,6 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     # GitLab (legacy — removed once the GitHub migration is complete)
-    GITLAB_WEBHOOK_SECRET: str
-    GITLAB_PAT: str
 
     # GitHub App
     # The App's identifier used as the JWT issuer. The numeric App ID works;
