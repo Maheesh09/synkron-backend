@@ -9,6 +9,7 @@ from pymongo.errors import DuplicateKeyError
 from app.config import settings
 from app.services.cloud_tasks import enqueue_pipeline, enqueue_feedback
 from app.database import get_db
+from app.services.rate_limit import within_rate_limit
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -125,6 +126,11 @@ async def _handle_push(payload: dict, delivery_id: str = "") -> dict:
     # [synkron] tag, so a merged docs PR won't re-trigger the pipeline.
     if any("[synkron]" in c.get("message", "") for c in commits):
         return {"status": "ignored", "reason": "synkron-authored commit"}
+
+    installation_id = payload.get("installation", {}).get("id")
+    if installation_id and not await within_rate_limit(installation_id):
+        logger.warning(f"Rate limit exceeded for installation {installation_id}, dropping push")
+        return {"status": "rate_limited", "reason": "hourly run limit reached"}
 
     await _safe_enqueue(enqueue_pipeline(payload, delivery_id), delivery_id)
     logger.info(f"Queued pipeline for {repo['full_name']} @ {payload['after'][:8]}")

@@ -55,6 +55,8 @@ async def connect_db():
         await _ensure_index(db.repositories, [("webhook_token_hash", 1)])
         await _ensure_index(db.repositories, [("owner_uid", 1)])
         await _ensure_index(db.webhook_deliveries, [("delivery_id", 1)], unique=True)
+        await _ensure_index(db.rate_limits, [("created_at", 1)], expireAfterSeconds=7200)
+        
     except Exception as e:
         logging.exception(f"Index creation failed (non-fatal): {e}")
 
