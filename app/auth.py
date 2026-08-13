@@ -45,4 +45,7 @@ def get_current_github_id(authorization: str = Header(None)) -> int:
     github_ids = identities.get("github.com")
     if not github_ids:
         raise HTTPException(status_code=403, detail="GitHub sign-in required")
-    return int(github_ids[0])    
+    try:
+        return int(github_ids[0])
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=403, detail="Invalid GitHub identity")   
