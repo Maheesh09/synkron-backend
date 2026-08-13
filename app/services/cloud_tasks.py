@@ -20,6 +20,25 @@ async def _dispatch_local(endpoint: str, payload: dict):
                          headers={"X-Internal-Token": settings.INTERNAL_SECRET})
         logger.info(f"[LOCAL] {endpoint} -> {r.status_code} {r.text[:200]}")
 
+def _task_exists(task_name: str) -> bool:
+    """Check if a Cloud Task with the given name exists."""
+    from google.cloud import tasks_v2
+    from google.api_core.exceptions import NotFound
+    if not task_name:
+        return False
+    client = _get_client()
+    full_task_path = client.task_path(
+        settings.GOOGLE_CLOUD_PROJECT, settings.GCP_REGION,
+        "synkron-pipeline-queue", task_name)
+    try:
+        client.get_task(name=full_task_path)
+        return True
+    except NotFound:
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to check task existence for {task_name}: {e}")
+        return False
+
 def _create_task(endpoint: str, payload: dict, task_name: str = None) -> str:
     from google.cloud import tasks_v2
     from google.protobuf import duration_pb2
@@ -75,14 +94,17 @@ async def enqueue_pipeline(payload: dict, delivery_id: str = ""):
     task_name_created = await asyncio.to_thread(_create_task, 'run-pipeline', payload, task_name_template)
     logger.info(f"Pipeline task created: {task_name_created}")
 
-async def enqueue_feedback(payload: dict):
+async def enqueue_feedback(payload: dict, delivery_id: str = ""):
     if settings.LOCAL_DEV:
         import asyncio
         from app.services.feedback import process_feedback
         logger.info("[LOCAL] Executing feedback process directly in background task")
         asyncio.create_task(process_feedback(payload))
         return
+    # Use delivery_id as Cloud Task name for built-in deduplication (~1 hour window).
+    # Task names must be alphanumeric + hyphens, so prefix the delivery ID (which is a UUID).
     # Dispatch synchronous Cloud Tasks API call to thread pool to avoid blocking event loop
     import asyncio
-    task_name = await asyncio.to_thread(_create_task, 'process-feedback', payload)
+    task_name_template = f"gh-fb-{delivery_id}" if delivery_id else None
+    task_name = await asyncio.to_thread(_create_task, 'process-feedback', payload, task_name_template)
     logger.info(f"Feedback task created: {task_name}")

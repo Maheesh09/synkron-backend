@@ -17,7 +17,10 @@ if not firebase_admin._apps:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await connect_db()
+    try:
+        await connect_db()
+    except Exception as e:
+        logging.exception(f"Failed to connect to database: {e}")
     yield
     await disconnect_db()
 
@@ -33,7 +36,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type",],
 )
 
