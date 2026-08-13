@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, Query, Depends
 from app.database import get_db
 from app.auth import get_current_github_id
 

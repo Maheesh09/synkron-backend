@@ -92,7 +92,7 @@ async def _safe_enqueue(enqueue_coro, delivery_id: str):
         raise HTTPException(status_code=503, detail="Enqueue failed; GitHub will retry")
         
 
-@router.post("/github")
+@router.post("/github", responses={503: {"description": "Enqueue failed; GitHub will retry"}})
 async def github_webhook(request: Request):
     body = await request.body()                       # raw bytes, for signature
     signature = request.headers.get("X-Hub-Signature-256", "")
