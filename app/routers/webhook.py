@@ -9,7 +9,7 @@ from pymongo.errors import DuplicateKeyError
 from app.config import settings
 from app.services.cloud_tasks import enqueue_pipeline, enqueue_feedback
 from app.database import get_db
-from app.services.rate_limit import within_rate_limit
+from app.services.rate_limit import check_rate_limit, reserve_rate_limit_quota, release_rate_limit_quota
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -57,18 +57,38 @@ async def _safe_enqueue(enqueue_coro, delivery_id: str):
     Run the enqueue synchronously so the Cloud Task is created BEFORE we answer
     GitHub. A FastAPI background task can be killed when Cloud Run freezes the
     instance right after the response, silently dropping the event. If the
-    enqueue fails, release the idempotency claim so GitHub's retry isn't seen as
-    a duplicate, then return 503 so GitHub actually retries.
+    enqueue fails, check if a task was actually created (using deterministic
+    naming). Only release the idempotency claim if we can confirm no task exists,
+    otherwise preserve the claim to avoid duplicate processing. Return 503 so
+    GitHub retries if we cannot confirm success.
     """
+    from app.services.cloud_tasks import _task_exists
+    import asyncio
     try:
         await enqueue_coro
     except Exception as e:
         logging.exception(f"Enqueue failed (delivery {delivery_id}): {e}")
+        # Check if the task actually exists despite the error (AlreadyExists or network issue)
         if delivery_id:
+            # Check for pipeline task (gh-{delivery_id}) or feedback task (gh-fb-{delivery_id})
+            # We need to infer which type based on the coroutine, but since we can't easily
+            # introspect, we'll check both patterns
+            task_exists_pipeline = await asyncio.to_thread(_task_exists, f"gh-{delivery_id}")
+            task_exists_feedback = await asyncio.to_thread(_task_exists, f"gh-fb-{delivery_id}")
+
+            if task_exists_pipeline or task_exists_feedback:
+                # Task exists, treat as success
+                logger.info(f"Task exists for delivery {delivery_id} despite enqueue error, treating as accepted")
+                return
+
+            # No task found, release the claim so GitHub can retry
             try:
                 await get_db().webhook_deliveries.delete_one({"delivery_id": delivery_id})
-            except Exception:
-                pass
+                logger.info(f"Released webhook delivery claim for {delivery_id} (no task found)")
+            except Exception as release_err:
+                logger.exception(f"Failed to release delivery claim for {delivery_id}: {release_err}")
+                # Cannot confirm state, preserve claim and fail
+                raise HTTPException(status_code=503, detail="Enqueue failed and state uncertain; preserved claim")
         raise HTTPException(status_code=503, detail="Enqueue failed; GitHub will retry")
         
 
@@ -128,13 +148,27 @@ async def _handle_push(payload: dict, delivery_id: str = "") -> dict:
         return {"status": "ignored", "reason": "synkron-authored commit"}
 
     installation_id = payload.get("installation", {}).get("id")
-    if installation_id and not await within_rate_limit(installation_id):
+    if installation_id and not await check_rate_limit(installation_id):
         logger.warning(f"Rate limit exceeded for installation {installation_id}, dropping push")
         return {"status": "rate_limited", "reason": "hourly run limit reached"}
 
-    await _safe_enqueue(enqueue_pipeline(payload, delivery_id), delivery_id)
-    logger.info(f"Queued pipeline for {repo['full_name']} @ {payload['after'][:8]}")
-    return {"status": "accepted"}
+    # Reserve quota before enqueuing
+    quota_reserved = False
+    if installation_id:
+        if not await reserve_rate_limit_quota(installation_id):
+            logger.warning(f"Rate limit exceeded for installation {installation_id} during reservation, dropping push")
+            return {"status": "rate_limited", "reason": "hourly run limit reached"}
+        quota_reserved = True
+
+    try:
+        await _safe_enqueue(enqueue_pipeline(payload, delivery_id), delivery_id)
+        logger.info(f"Queued pipeline for {repo['full_name']} @ {payload['after'][:8]}")
+        return {"status": "accepted"}
+    except HTTPException:
+        # Release quota if enqueue failed
+        if quota_reserved and installation_id:
+            await release_rate_limit_quota(installation_id)
+        raise
 
 async def _handle_pull_request(payload: dict, delivery_id: str = "") -> dict:
 
@@ -150,7 +184,7 @@ async def _handle_pull_request(payload: dict, delivery_id: str = "") -> dict:
     if not head_ref.startswith("synkron/docs-"):
         return {"status": "ignored", "reason": "not a synkron docs PR"}
 
-    await _safe_enqueue(enqueue_feedback(payload), delivery_id)
+    await _safe_enqueue(enqueue_feedback(payload, delivery_id), delivery_id)
     logger.info(f"Queued feedback for merged docs PR #{pr.get('number')}")
     return {"status": "accepted"}
 
