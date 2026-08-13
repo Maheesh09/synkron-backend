@@ -6,6 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 import firebase_admin
 from app.config import settings as _settings
+_cors_origins = [o.strip() for o in _settings.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
 
 # Initialise the Firebase Admin SDK once. On Cloud Run this uses the service
 # account's Application Default Credentials; verify_id_token only needs the
@@ -31,9 +32,9 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://synkron.dev"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type",],
 )
 
 

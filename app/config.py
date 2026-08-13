@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Firebase Authentication — project that mints the user ID tokens.
     FIREBASE_PROJECT_ID: str = ""
 
+    # CORS
+    CORS_ALLOWED_ORIGINS: str = ""
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
