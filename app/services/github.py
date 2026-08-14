@@ -113,7 +113,10 @@ class GitHubClient:
 
     async def get_branch_head(self, branch: str) -> str:
         """Return the commit SHA a branch currently points at."""
-        escaped_branch = quote(branch, safe="/")
+        # Branch names are part of the URL path. A slash in a branch name (e.g.
+        # "synkron/docs-abc123") must be percent-encoded, otherwise GitHub treats
+        # it as a nested path and returns 404.
+        escaped_branch = quote(branch, safe="")
         resp = await self._request("GET", f"{self._repo_path}/git/ref/heads/{escaped_branch}")
         return resp.json()["object"]["sha"]
 
@@ -208,7 +211,7 @@ class GitHubClient:
             json={"message": message, "tree": new_tree["sha"], "parents": [head_sha]},
         )).json()
 
-        escaped_branch = quote(branch, safe="/")
+        escaped_branch = quote(branch, safe="")
         await self._request(
             "PATCH",
             f"{self._repo_path}/git/refs/heads/{escaped_branch}",

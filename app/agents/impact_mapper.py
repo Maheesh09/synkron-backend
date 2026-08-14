@@ -5,7 +5,7 @@ import json, asyncio, logging
 logger = logging.getLogger(__name__)
 
 DOC_EXTENSIONS      = (".md", ".rst", ".mdx", "openapi.yaml", "openapi.json")
-RELEVANCE_THRESHOLD = 0.65
+RELEVANCE_THRESHOLD = 0.4
 MAX_DOCS            = 12
 
 
