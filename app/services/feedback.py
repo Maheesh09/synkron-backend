@@ -103,6 +103,7 @@ async def process_feedback(payload: dict):
             # string repo_key (owner/repo) for stable querying across GitHub installs
             pattern = CorrectionPattern(
                 repo_id=repo_id,
+                run_id=run["run_id"],
                 repo_key=repo_key,
                 mr_id=pr_number,
                 doc_path=doc_path, doc_type=doc_type,
