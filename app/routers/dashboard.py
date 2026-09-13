@@ -53,6 +53,26 @@ async def get_health_stats(github_id: int = Depends(get_current_github_id)):
     ]).to_list(length=1)
     docs_updated = docs_agg[0]["total"] if docs_agg else 0
 
+    lat_agg = await db.pipeline_runs.aggregate([
+        {"$match": {**scope, "status": "completed", "duration_seconds": {"$exists": True}}},
+        {"$group": {
+            "_id": None,
+            "durations": {"$push": "$duration_seconds"},
+            "cost": {"$sum": "$cost_usd"},
+            "tokens": {"$sum": "$tokens_total"},
+        }},
+    ]).to_list(length=1)
+
+    p50 = p95 = 0.0
+    total_cost = total_tokens = 0
+    if lat_agg:
+        d = sorted(lat_agg[0]["durations"])
+        if d:
+            p50 = round(d[int(len(d) * 0.50)], 1)
+            p95 = round(d[min(int(len(d) * 0.95), len(d) - 1)], 1)
+        total_cost = round(lat_agg[0].get("cost") or 0, 4)
+        total_tokens = lat_agg[0].get("tokens") or 0
+
     return {
         "total_runs":     total,
         "completed_runs": completed,
@@ -60,6 +80,10 @@ async def get_health_stats(github_id: int = Depends(get_current_github_id)):
         "success_rate":   round(completed / total * 100, 1) if total > 0 else 0,
         "avg_duration":   avg_duration,
         "docs_updated":   docs_updated,
+        "p50_duration":   p50,
+        "p95_duration":   p95,
+        "total_cost":     total_cost,
+        "total_tokens":   total_tokens,
     }
 
 

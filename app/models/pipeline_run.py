@@ -23,6 +23,13 @@ class PipelineRun(BaseModel):
     duration_seconds: Optional[float] = None
     error_message:    Optional[str] = None
     agent_session_id: Optional[str] = None
+    merged_at:        Optional[datetime] = None
+    skip_reason:      Optional[str] = None
+    error_type:       Optional[str] = None
+    stage_ms:         dict = {}
+    tokens_total:     int = 0
+    cost_usd:         float = 0.0
+    gemini_calls:     int = 0
     created_at:       datetime = Field(default_factory=datetime.utcnow)
 
 

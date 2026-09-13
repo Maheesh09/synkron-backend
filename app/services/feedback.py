@@ -2,6 +2,7 @@ from app.services.github import GitHubClient
 from app.database import get_db
 from app.models.pipeline_run import CorrectionPattern
 import difflib, logging
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,10 @@ async def process_feedback(payload: dict):
 
     # Find the pipeline run linked to this merged PR
     run = await db.pipeline_runs.find_one({"mr_id": pr_number, "repo_id": repo_id})
+    await db.pipeline_runs.update_one(
+        {"run_id": run["run_id"]},
+        {"$set": {"merged_at": datetime.now(timezone.utc)}}
+    )
     if not run:
         logger.info(f"No pipeline run found for PR #{pr_number} in repo {repo_id}")
         return
@@ -68,8 +73,13 @@ async def process_feedback(payload: dict):
 
             ai_content = run_detail["ai_written"]
 
-            # If no edits, developer accepted Synkron's output — great!
+            # Accepted verbatim. Record it — an unmarked doc would otherwise be
+            # indistinguishable from a PR that was never merged at all.
             if ai_content.strip() == merged_content.strip():
+                await db.pipeline_run_details.update_one(
+                    {"run_id": run["run_id"], "doc_path": doc_path},
+                    {"$set": {"merged": True, "edited": False}}
+                )
                 continue
 
             # Compute the diff (what the human changed)
