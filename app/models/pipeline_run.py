@@ -30,12 +30,14 @@ class PipelineRun(BaseModel):
     tokens_total:     int = 0
     cost_usd:         float = 0.0
     gemini_calls:     int = 0
+    run_id:           Optional[str] = None
     created_at:       datetime = Field(default_factory=datetime.utcnow)
 
 
 class CorrectionPattern(BaseModel):
     repo_id:          int
     repo_key:         Optional[str] = None  # Added for GitHub: "owner/repo" format
+    run_id: Optional[str] = None
     mr_id:            int
     doc_path:         str
     doc_type:         str
