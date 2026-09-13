@@ -23,6 +23,7 @@ class PipelineRun(BaseModel):
     duration_seconds: Optional[float] = None
     error_message:    Optional[str] = None
     agent_session_id: Optional[str] = None
+    merged_at:        Optional[datetime] = None
     skip_reason:      Optional[str] = None
     error_type:       Optional[str] = None
     stage_ms:         dict = {}
