@@ -30,13 +30,13 @@ class DocWriterAgent:
         current  = await self.client.get_file_content(doc["path"])
         doc_type = classify_doc(doc["path"])
 
-        # Pull past correction examples from MongoDB (feedback loop)
-        # Query by the stable string key (owner/repo) that we now store in repo_key field.
-        # For backward compatibility, we also check the legacy numeric repo_id field.
+        # Pull past correction examples from MongoDB (feedback loop), keyed by
+        # the stable "owner/repo" string. Covered by the
+        # (repo_key, doc_type, created_at) index created in database.py.
         repo_key = f"{self.client.owner}/{self.client.repo}"
         db       = get_db()
         examples = await db.correction_patterns.find(
-            {"$or": [{"repo_key": repo_key}, {"repo_id": repo_key}], "doc_type": doc_type}
+            {"repo_key": repo_key, "doc_type": doc_type}
         ).sort("created_at", -1).limit(2).to_list(length=2)
 
         few_shot = ""
