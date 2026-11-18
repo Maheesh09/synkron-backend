@@ -24,7 +24,7 @@ def normalize_cors_origins(raw: str):
             origins.append("*")
             continue
         if "://" not in origin:
-            origin = f"https://{origin}" if not origin.startswith("https://") and not origin.startswith("https://") else origin
+            origin = f"https://{origin}"   # bare host: assume https
         parsed = urlsplit(origin)
         host = parsed.netloc or parsed.path
         if host:
