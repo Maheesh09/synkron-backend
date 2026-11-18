@@ -1,5 +1,6 @@
 from app.services.github import GitHubClient
 from app.services.gemini import call_gemini
+from app.services.github_auth import get_app_bot_login
 from typing import List
 import logging
 
@@ -22,9 +23,9 @@ class PRCreatorAgent:
         # This makes the workflow resumable if a previous run failed partway
         if await self.client.branch_exists(branch):
             author = await self.client.get_branch_author(branch)
-            # Only reuse if the branch was created by this bot (Synkron)
-            # GitHub Apps appear with type="Bot" in the author field
-            if author and "[bot]" in author.lower():
+            # Only reuse a branch whose last commit is by THIS App. Any other bot
+            # (dependabot, github-actions, ...) must not be treated as Synkron.
+            if author and author == await get_app_bot_login():
                 logger.info(f"Reusing existing Synkron branch: {branch}")
             else:
                 # Branch exists but wasn't created by us - fail safely
