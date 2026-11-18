@@ -2,6 +2,7 @@ from app.services.github import GitHubClient
 from app.services.gemini import call_gemini
 from app.database import get_db
 from app.services.doc_types import classify_doc
+from app.services.errors import is_retryable
 from typing import List
 import logging
 
@@ -20,6 +21,10 @@ class DocWriterAgent:
             try:
                 result = await self._rewrite_doc(doc)
             except Exception as e:
+                # A Gemini 503 or timeout must reach the orchestrator's retry
+                # logic; swallowing it would end the run as "no_doc_updates".
+                if is_retryable(e):
+                    raise
                 logger.warning(f"Skipping {doc.get('path')}: {e}")
                 continue
             if result:

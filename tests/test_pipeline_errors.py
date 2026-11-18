@@ -154,3 +154,35 @@ def test_endpoint_flags_last_attempt(client, monkeypatch):
     client.post("/internal/run-pipeline", json=_BODY,
                 headers={"X-Internal-Token": "s3cret", "X-CloudTasks-TaskRetryCount": "2"})
     assert run.await_args.kwargs["final_attempt"] is True
+
+
+# --------------------------------------------------------------------------
+# One run per Cloud Tasks task
+# --------------------------------------------------------------------------
+
+def test_task_name_has_a_unique_index_that_ignores_runs_without_one():
+    from app.database import index_specs
+    db = MagicMock()
+    specs = [(c, k, o) for c, k, o in index_specs(db) if c is db.pipeline_runs]
+    keys = {tuple(k): o for _, k, o in specs}
+    opts = keys[(("task_name", 1),)]
+    assert opts["unique"] is True
+    # Partial, not sparse: a sparse index still indexes explicit nulls.
+    assert opts["partialFilterExpression"] == {"task_name": {"$type": "string"}}
+
+
+@pytest.mark.asyncio
+async def test_run_without_task_name_does_not_store_a_null_task_name(fake_db):
+    await orchestrator._start_run(fake_db, 1, "b", None)
+    doc = fake_db.pipeline_runs.insert_one.await_args.args[0]
+    assert "task_name" not in doc
+
+
+@pytest.mark.asyncio
+async def test_overlapping_attempts_share_one_run(fake_db):
+    """If another attempt inserted the run between our find and insert, the
+    unique index rejects ours and we join the existing run instead."""
+    from pymongo.errors import DuplicateKeyError
+    fake_db.pipeline_runs.find_one = AsyncMock(side_effect=[None, {"run_id": "run-1"}])
+    fake_db.pipeline_runs.insert_one = AsyncMock(side_effect=DuplicateKeyError("dup"))
+    assert await orchestrator._start_run(fake_db, 1, "b", "projects/p/tasks/gh-1") == "run-1"

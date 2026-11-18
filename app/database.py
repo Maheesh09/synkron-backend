@@ -46,9 +46,23 @@ async def connect_db():
         return
 
     # Connected — ensure indexes independently, best-effort so an index hiccup can't crash boot.
-    indexes = [
+    for coll, keys, opts in index_specs(db):
+        try:
+            await _ensure_index(coll, keys, **opts)
+        except Exception as e:
+            logging.exception(f"Index creation failed for {keys} (non-fatal): {e}")
+
+
+def index_specs(db) -> list:
+    """(collection, keys, options) for every index the app relies on."""
+    return [
         (db.pipeline_runs, [("repo_id", 1), ("created_at", -1)], {}),
         (db.pipeline_runs, [("mr_id", 1)], {}),
+        # One run per Cloud Tasks task: _start_run looks runs up by task_name on
+        # every attempt. Partial rather than sparse, because a sparse index
+        # still indexes explicit nulls and runs without a task name would clash.
+        (db.pipeline_runs, [("task_name", 1)],
+         {"unique": True, "partialFilterExpression": {"task_name": {"$type": "string"}}}),
         (db.correction_patterns, [("repo_id", 1), ("doc_type", 1), ("created_at", -1)], {}),
         (db.correction_patterns, [("repo_key", 1), ("doc_type", 1), ("created_at", -1)], {}),
         (db.repositories, [("repo_id", 1)], {"unique": True}),
@@ -58,11 +72,6 @@ async def connect_db():
         (db.webhook_deliveries, [("delivery_id", 1)], {"unique": True}),
         (db.rate_limits, [("created_at", 1)], {"expireAfterSeconds": 7200}),
     ]
-    for coll, keys, opts in indexes:
-        try:
-            await _ensure_index(coll, keys, **opts)
-        except Exception as e:
-            logging.exception(f"Index creation failed for {keys} (non-fatal): {e}")
 
 
 async def disconnect_db():
