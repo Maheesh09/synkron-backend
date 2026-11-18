@@ -30,13 +30,13 @@ async def process_feedback(payload: dict):
 
     # Find the pipeline run linked to this merged PR
     run = await db.pipeline_runs.find_one({"mr_id": pr_number, "repo_id": repo_id})
+    if not run:
+        logger.info(f"No pipeline run found for PR #{pr_number} in repo {repo_id}")
+        return
     await db.pipeline_runs.update_one(
         {"run_id": run["run_id"]},
         {"$set": {"merged_at": datetime.now(timezone.utc)}}
     )
-    if not run:
-        logger.info(f"No pipeline run found for PR #{pr_number} in repo {repo_id}")
-        return
 
     # Extract owner/repo for GitHubClient
     full_name = repository.get("full_name", "")
