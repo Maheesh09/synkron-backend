@@ -119,7 +119,8 @@ jobs:
           MONGODB_DB_NAME: ${{ vars.MONGODB_DB_NAME || 'synkron-dev' }}
           FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || vars.GCP_PROJECT_ID }}
           CORS_ALLOWED_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}
-          GITHUB_APP_ID: ${{ vars.GITHUB_APP_ID }}
+          # GitHub forbids variable names starting with GITHUB_, hence the prefix.
+          GITHUB_APP_ID: ${{ vars.SYNKRON_GITHUB_APP_ID }}
           USE_AGENT_BUILDER: ${{ vars.USE_AGENT_BUILDER || 'true' }}
         # JSON is valid YAML, so json.dump gives correct quoting for any value
         # (CORS origins contain commas, which --set-env-vars would split on).
