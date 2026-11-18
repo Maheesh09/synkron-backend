@@ -1,0 +1,37 @@
+# Merge to `main` -> test -> deploy to the production Cloud Run service (synkron-backend).
+#
+# A merged pull request is a push to main, so every merge deploys. To require a
+# manual approval first, add "Required reviewers" to the `production`
+# environment in GitHub (Settings -> Environments); no change here is needed.
+
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Deploys run one at a time, in order; a newer merge waits for the current one.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/deploy.yml
+    permissions:
+      contents: read
+      id-token: write   # OIDC token for Workload Identity Federation
+    with:
+      environment: production
+      secret_prefix: synkron-prod
+      default_db_name: synkron-cluster
+      # max/min instances omitted: keep whatever the service already has.

@@ -1,0 +1,38 @@
+# Unit tests. Runs on every pull request, and is called by the deploy
+# workflows so nothing is deployed without passing it first.
+
+name: Test
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Settings() requires these at import time; tests never reach real services.
+      MONGODB_URI: mongodb://localhost:27017
+      SERVICE_URL: http://localhost:8080
+      INTERNAL_SECRET: ci-dummy
+      GEMINI_API_KEY: ci-dummy
+      LOCAL_DEV: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -q
