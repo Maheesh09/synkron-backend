@@ -30,6 +30,10 @@ class Settings(BaseSettings):
 
     RATE_LIMIT_PER_HOUR: int = 20
 
+    # Must match the Cloud Tasks queue's --max-attempts. On the last attempt a
+    # retryable error is recorded as a failure instead of asking for a retry.
+    PIPELINE_MAX_ATTEMPTS: int = 3
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
