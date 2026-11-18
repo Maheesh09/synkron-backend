@@ -7,6 +7,7 @@ import logging
 from contextlib import asynccontextmanager
 import firebase_admin
 from app.config import settings as _settings
+from app.middleware.security_headers import SecurityHeadersMiddleware
 
 
 def normalize_cors_origins(raw: str):
@@ -55,14 +56,22 @@ app = FastAPI(
     version="1.0.0",
     description="AI documentation agent powered by GitLab + Gemini",
     lifespan=lifespan,
+    # Interactive docs expose the whole API surface; only serve them locally.
+    docs_url="/docs" if _settings.LOCAL_DEV else None,
+    redoc_url="/redoc" if _settings.LOCAL_DEV else None,
+    openapi_url="/openapi.json" if _settings.LOCAL_DEV else None,
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_methods=["GET", "POST", "OPTIONS", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type",],
+    allow_methods=["GET", "POST", "OPTIONS"],   # the API exposes no PUT/PATCH/DELETE routes
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+# Added last, so it is the outermost middleware and also covers CORS
+# preflight responses and 4xx errors.
+app.add_middleware(SecurityHeadersMiddleware, hsts=not _settings.LOCAL_DEV)
 
 
 # Routes

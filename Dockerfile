@@ -15,4 +15,5 @@ COPY . .
 EXPOSE 8080
 
 # Command to run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# --no-server-header: don't advertise "server: uvicorn" to scanners
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-server-header"]
