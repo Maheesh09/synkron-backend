@@ -30,7 +30,6 @@ class PipelineRun(BaseModel):
     tokens_total:     int = 0
     cost_usd:         float = 0.0
     gemini_calls:     int = 0
-    run_id:           Optional[str] = None
     created_at:       datetime = Field(default_factory=datetime.utcnow)
 
 

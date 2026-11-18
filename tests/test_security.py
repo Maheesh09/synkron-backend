@@ -164,8 +164,7 @@ async def test_rate_limit_disabled_when_limit_is_zero(monkeypatch):
     from app.services import rate_limit
 
     monkeypatch.setattr(settings, "RATE_LIMIT_PER_HOUR", 0)
-    assert await rate_limit.check_rate_limit(123) is True
-    assert await rate_limit.reserve_rate_limit_quota(123) is True
+    assert await rate_limit.reserve_rate_limit_quota(123) == (True, None)
 
 
 @pytest.mark.asyncio
@@ -179,4 +178,4 @@ async def test_rate_limit_fails_open_when_datastore_is_down(monkeypatch):
         raise RuntimeError("mongo down")
 
     monkeypatch.setattr(rate_limit, "get_db", boom)
-    assert await rate_limit.check_rate_limit(123) is True
+    assert await rate_limit.reserve_rate_limit_quota(123) == (True, None)

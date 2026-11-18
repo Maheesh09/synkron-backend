@@ -1,6 +1,7 @@
 from app.services.github import GitHubClient
 from app.database import get_db
 from app.models.pipeline_run import CorrectionPattern
+from app.services.doc_types import classify_doc
 import difflib, logging
 from datetime import datetime, timezone
 
@@ -30,13 +31,13 @@ async def process_feedback(payload: dict):
 
     # Find the pipeline run linked to this merged PR
     run = await db.pipeline_runs.find_one({"mr_id": pr_number, "repo_id": repo_id})
+    if not run:
+        logger.info(f"No pipeline run found for PR #{pr_number} in repo {repo_id}")
+        return
     await db.pipeline_runs.update_one(
         {"run_id": run["run_id"]},
         {"$set": {"merged_at": datetime.now(timezone.utc)}}
     )
-    if not run:
-        logger.info(f"No pipeline run found for PR #{pr_number} in repo {repo_id}")
-        return
 
     # Extract owner/repo for GitHubClient
     full_name = repository.get("full_name", "")
@@ -89,14 +90,8 @@ async def process_feedback(payload: dict):
                 lineterm="", n=2
             ))
 
-            # Classify doc type for better retrieval
-            p = doc_path.lower()
-            doc_type = (
-                "readme"         if "readme" in p else
-                "api_reference"  if "api" in p    else
-                "authentication" if "auth" in p   else
-                "general"
-            )
+            # Same classifier the Doc Writer uses to look corrections up.
+            doc_type = classify_doc(doc_path)
 
             # Store correction as a future few-shot example
             # Store both numeric repo_id (for consistency with PipelineRun) and
