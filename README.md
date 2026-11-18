@@ -199,26 +199,34 @@ gcloud tasks queues update synkron-pipeline-queue \
 
 This ensures one push always maps to exactly one pipeline attempt with no concurrent overlap.
 
-### Dev deployments (GitHub Actions)
+### Automatic deployments (GitHub Actions)
 
-Every push to the `dev` branch runs [.github/workflows/deploy-dev.yml](.github/workflows/deploy-dev.yml):
+| Branch | Workflow | Cloud Run service | Secrets | GitHub environment |
+|---|---|---|---|---|
+| `dev` | [deploy-dev.yml](.github/workflows/deploy-dev.yml) | `synkron-backend-dev` | `synkron-dev-*` | `dev` |
+| `main` | [deploy-prod.yml](.github/workflows/deploy-prod.yml) | `synkron-backend` (production) | `synkron-prod-*` | `production` |
 
-1. **Test**: installs `requirements-dev.txt` and runs `pytest`. A failing test stops the deploy.
-2. **Build**: builds the Docker image and pushes it to Artifact Registry, tagged with the commit SHA.
-3. **Deploy**: deploys the image to the `synkron-backend-dev` Cloud Run service. Secrets come from Secret Manager; nothing secret is stored in GitHub.
+Merging a pull request into `main` deploys production; pushing to `dev` deploys dev. Each run:
+
+1. **Test**: runs `pytest` ([test.yml](.github/workflows/test.yml)). A failing test stops the deploy. The same tests also run on every pull request.
+2. **Build**: builds the Docker image and pushes it to Artifact Registry, tagged with the commit SHA. If that commit was already built, the existing image is reused.
+3. **Deploy**: deploys the image to the branch's Cloud Run service ([deploy.yml](.github/workflows/deploy.yml)). Secrets come from Secret Manager; non-secret settings come from the GitHub environment's variables.
 4. **Smoke test**: calls `/health` on the new revision.
 
-Pushes to other branches never deploy. The workflow only runs on `dev`, the `dev` GitHub environment accepts deployments from `dev` only, and Google Cloud only trusts GitHub tokens issued for `refs/heads/dev` of this repo.
+Each environment accepts deployments only from its own branch, Google Cloud only trusts GitHub tokens for `dev` and `main` of this repo, and each branch's deployer account can deploy only its own service.
 
-**One-time setup** (needs owner access to the GCP project and `gh` logged in):
+To require a manual approval before production deploys, add **Required reviewers** to the `production` environment (GitHub → Settings → Environments).
+
+**Rolling back production**: in Cloud Run, open `synkron-backend` → Revisions → send 100% of traffic to the previous revision, or revert the commit on `main`.
+
+**One-time setup** (needs owner access to the GCP project and `gh` logged in; reads values from the env file):
 
 ```bash
-bash scripts/setup-dev-deploy.sh --env-file env.yaml
+bash scripts/setup-deploy.sh --target dev  --env-file env.yaml
+bash scripts/setup-deploy.sh --target prod --env-file env.yaml
 ```
 
-It creates the Artifact Registry repo, a deployer and a runtime service account, the Workload Identity Federation provider, the `synkron-dev-*` secrets (seeded from the env file), and the `dev` GitHub environment with its variables. It is safe to re-run. To rotate secrets after editing the env file, run it again with `--update-secrets`.
-
-Dev writes to the MongoDB database `synkron-dev` by default. Set `MONGODB_DB_NAME` on the `dev` environment to change it.
+It is safe to re-run. To rotate secrets after editing the env file, add `--update-secrets`. Dev writes to the MongoDB database `synkron-dev` by default; set `MONGODB_DB_NAME` on the `dev` environment to change it.
 
 ---
 
