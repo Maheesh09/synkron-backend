@@ -1,0 +1,189 @@
+# Reusable: build the image and deploy it to one Cloud Run service.
+# Called by deploy-dev.yml and deploy-prod.yml; never runs on its own.
+#
+# Authenticates with Workload Identity Federation (no service-account keys).
+# Secrets are mounted by Cloud Run from Secret Manager ("<secret_prefix>-*");
+# non-secret settings come from the GitHub environment's variables.
+
+name: Deploy (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment holding this target's variables
+        required: true
+        type: string
+      secret_prefix:
+        description: Prefix of the Secret Manager secrets, e.g. synkron-dev
+        required: true
+        type: string
+      default_db_name:
+        required: true
+        type: string
+      max_instances:
+        description: Cloud Run max instances; empty keeps the service's current value
+        required: false
+        type: string
+        default: ""
+      min_instances:
+        description: Cloud Run min instances; empty keeps the service's current value
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.verify.outputs.url }}
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION || 'asia-southeast1' }}
+      SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      ARTIFACT_REPO: ${{ vars.ARTIFACT_REPO || 'synkron' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check configuration
+        env:
+          WIF_PROVIDER: ${{ vars.WIF_PROVIDER }}
+          DEPLOYER_SA: ${{ vars.DEPLOYER_SA }}
+          RUNTIME_SA: ${{ vars.RUNTIME_SA }}
+        run: |
+          missing=""
+          for v in GCP_PROJECT_ID SERVICE WIF_PROVIDER DEPLOYER_SA RUNTIME_SA; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing variables on the '${{ inputs.environment }}' environment:$missing"
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        id: image
+        run: |
+          IMAGE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}/synkron-backend:${GITHUB_SHA}"
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          # The same commit may already be built (e.g. merged to dev, then main).
+          if gcloud artifacts docker images describe "$IMAGE" >/dev/null 2>&1; then
+            echo "Image for ${GITHUB_SHA::7} already exists; reusing it"
+          else
+            docker build \
+              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+              -t "$IMAGE" .
+            docker push "$IMAGE"
+          fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Look up current service URL
+        id: current
+        run: |
+          url=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" \
+                  --format='value(status.url)' 2>/dev/null || true)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Write non-secret environment
+        env:
+          # A fixed SERVICE_URL variable wins; otherwise use the service's own URL.
+          SERVICE_URL: ${{ vars.SERVICE_URL || steps.current.outputs.url }}
+          MONGODB_DB_NAME: ${{ vars.MONGODB_DB_NAME || inputs.default_db_name }}
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || vars.GCP_PROJECT_ID }}
+          CORS_ALLOWED_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}
+          # GitHub forbids variable names starting with GITHUB_, hence the prefix.
+          GITHUB_APP_ID: ${{ vars.SYNKRON_GITHUB_APP_ID }}
+          USE_AGENT_BUILDER: ${{ vars.USE_AGENT_BUILDER || 'true' }}
+        # JSON is valid YAML, so json.dump gives correct quoting for any value
+        # (CORS origins contain commas, which --set-env-vars would split on).
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          keys = ["GCP_REGION", "SERVICE_URL", "MONGODB_DB_NAME", "FIREBASE_PROJECT_ID",
+                  "CORS_ALLOWED_ORIGINS", "GITHUB_APP_ID", "USE_AGENT_BUILDER"]
+          env = {k: os.environ.get(k, "") for k in keys}
+          env["GOOGLE_CLOUD_PROJECT"] = os.environ["GCP_PROJECT_ID"]
+          env["LOCAL_DEV"] = "false"
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "env.yaml"), "w") as f:
+              json.dump(env, f, indent=2)
+          EOF
+
+      - name: Deploy to Cloud Run
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          RUNTIME_SA: ${{ vars.RUNTIME_SA }}
+          PREFIX: ${{ inputs.secret_prefix }}
+          MAX_INSTANCES: ${{ inputs.max_instances }}
+          MIN_INSTANCES: ${{ inputs.min_instances }}
+        run: |
+          # ENV_VAR=secret-name:version, mounted from Secret Manager at runtime.
+          SECRETS="MONGODB_URI=${PREFIX}-mongodb-uri:latest"
+          SECRETS+=",GEMINI_API_KEY=${PREFIX}-gemini-api-key:latest"
+          SECRETS+=",GOOGLE_API_KEY=${PREFIX}-google-api-key:latest"
+          SECRETS+=",INTERNAL_SECRET=${PREFIX}-internal-secret:latest"
+          SECRETS+=",GITHUB_WEBHOOK_SECRET=${PREFIX}-github-webhook-secret:latest"
+          SECRETS+=",GITHUB_APP_PRIVATE_KEY=${PREFIX}-github-app-private-key:latest"
+
+          extra=()
+          [ -n "$MAX_INSTANCES" ] && extra+=(--max-instances "$MAX_INSTANCES")
+          [ -n "$MIN_INSTANCES" ] && extra+=(--min-instances "$MIN_INSTANCES")
+
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE" \
+            --region "$GCP_REGION" \
+            --service-account "$RUNTIME_SA" \
+            --env-vars-file "$RUNNER_TEMP/env.yaml" \
+            --set-secrets "$SECRETS" \
+            --allow-unauthenticated \
+            --port 8080 \
+            --cpu 1 \
+            --memory 1Gi \
+            --timeout 600 \
+            "${extra[@]}" \
+            --labels "env=${{ inputs.environment }},commit-sha=${GITHUB_SHA::12}" \
+            --quiet
+
+      # SERVICE_URL is where Cloud Tasks calls back into the service. On a
+      # brand-new service the URL is not known until it exists.
+      - name: Set SERVICE_URL on first deploy
+        if: vars.SERVICE_URL == ''
+        env:
+          PREVIOUS_URL: ${{ steps.current.outputs.url }}
+        run: |
+          url=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          if [ "$url" != "$PREVIOUS_URL" ]; then
+            echo "Service URL changed to $url; updating SERVICE_URL"
+            gcloud run services update "$SERVICE" --region "$GCP_REGION" \
+              --update-env-vars "SERVICE_URL=$url" --quiet
+          fi
+
+      - name: Smoke test
+        id: verify
+        run: |
+          url=$(gcloud run services describe "$SERVICE" --region "$GCP_REGION" --format='value(status.url)')
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          for i in 1 2 3 4 5; do
+            if curl -fsS --max-time 10 "$url/health"; then
+              echo
+              echo "### Deployed \`${GITHUB_SHA::7}\` to [$SERVICE]($url)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep $((i * 5))
+          done
+          echo "::error::$url/health did not return 200"
+          exit 1
