@@ -1,6 +1,7 @@
 from app.services.github import GitHubClient
 from app.database import get_db
 from app.models.pipeline_run import CorrectionPattern
+from app.services.doc_types import classify_doc
 import difflib, logging
 from datetime import datetime, timezone
 
@@ -89,14 +90,8 @@ async def process_feedback(payload: dict):
                 lineterm="", n=2
             ))
 
-            # Classify doc type for better retrieval
-            p = doc_path.lower()
-            doc_type = (
-                "readme"         if "readme" in p else
-                "api_reference"  if "api" in p    else
-                "authentication" if "auth" in p   else
-                "general"
-            )
+            # Same classifier the Doc Writer uses to look corrections up.
+            doc_type = classify_doc(doc_path)
 
             # Store correction as a future few-shot example
             # Store both numeric repo_id (for consistency with PipelineRun) and
