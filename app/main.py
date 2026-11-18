@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 from app.routers import webhook, pipeline, dashboard
 from app.database import connect_db, disconnect_db
 import logging
+import os
 from contextlib import asynccontextmanager
 import firebase_admin
 from app.config import settings as _settings
@@ -40,8 +41,20 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(options={"projectId": _settings.FIREBASE_PROJECT_ID})
 
 
+def warn_if_local_dev_on_cloud_run(local_dev: bool, environ) -> bool:
+    """LOCAL_DEV disables HSTS, exposes /docs and bypasses Cloud Tasks. Cloud
+    Run always sets K_SERVICE, so both together means a misconfigured deploy."""
+    if local_dev and environ.get("K_SERVICE"):
+        logging.getLogger(__name__).error(
+            "LOCAL_DEV=true on Cloud Run service %r: HSTS is off, /docs is public "
+            "and pipelines run in-process. Set LOCAL_DEV=false.", environ["K_SERVICE"])
+        return True
+    return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    warn_if_local_dev_on_cloud_run(_settings.LOCAL_DEV, os.environ)
     try:
         await connect_db()
     except Exception as e:
