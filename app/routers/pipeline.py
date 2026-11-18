@@ -3,6 +3,7 @@ from app.agents.orchestrator import run_pipeline
 from app.config import settings
 from app.services.errors import PipelineRetry
 from app.services.feedback import process_feedback
+from app.services.sweeper import sweep_abandoned_runs
 from app.security import require_internal_token
 from app.models.payloads import RunPipelinePayload, FeedbackPayload
 
@@ -41,3 +42,8 @@ async def run_pipeline_endpoint(
 async def process_feedback_endpoint(payload: FeedbackPayload):
     await process_feedback(payload.model_dump())
     return {"status": "processed"}
+
+@router.post("/sweep", dependencies=[Depends(require_internal_token)])
+async def sweep_endpoint():
+    """Called by Cloud Scheduler every 15 minutes (see README)."""
+    return {"status": "ok", "abandoned": await sweep_abandoned_runs()}

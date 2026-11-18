@@ -201,6 +201,19 @@ gcloud tasks queues update synkron-pipeline-queue \
 
 A transient failure (Gemini or GitHub 5xx/429, timeouts, MongoDB unreachable) gets up to 3 attempts with backoff. Permanent failures are recorded as `failed` and not retried, and every attempt of one push reuses the same run record. This is safe because the PR Creator is idempotent: it reuses the branch and finds the existing PR. Keep `--max-attempts` equal to the `PIPELINE_MAX_ATTEMPTS` setting (default `3`).
 
+**6. Sweep abandoned runs every 15 minutes**
+
+If an instance is stopped mid-run (timeout, out of memory, redeploy), the run would stay `running` forever. `POST /internal/sweep` marks runs with no progress for 15 minutes as `failed` (`error_type: Abandoned`):
+
+```bash
+gcloud scheduler jobs create http synkron-sweep \
+  --location YOUR_REGION \
+  --schedule "*/15 * * * *" \
+  --http-method POST \
+  --uri "https://YOUR_CLOUD_RUN_URL/internal/sweep" \
+  --headers "X-Internal-Token=YOUR_INTERNAL_SECRET"
+```
+
 ### Dev deployments (GitHub Actions)
 
 Every push to the `dev` branch runs [.github/workflows/deploy-dev.yml](.github/workflows/deploy-dev.yml):
