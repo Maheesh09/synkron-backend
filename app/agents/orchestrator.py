@@ -8,6 +8,7 @@ from app.models.pipeline_run import PipelineRun
 from app.services.errors import PipelineRetry, is_retryable
 from app.services.gemini import start_usage_tracking, get_usage
 from datetime import datetime
+from pymongo.errors import DuplicateKeyError
 import time, logging
 
 logger = logging.getLogger(__name__)
@@ -18,20 +19,35 @@ async def _start_run(db, repo_id: int, after_sha: str, task_name: str | None) ->
     task, so one push maps to one run however many attempts it takes.
     last_attempt_at lets the sweeper tell a stalled run from one still retrying."""
     now = datetime.utcnow()
-    if task_name:
+
+    async def _join_existing() -> str | None:
         existing = await db.pipeline_runs.find_one({"task_name": task_name})
-        if existing:
-            await db.pipeline_runs.update_one(
-                {"run_id": existing["run_id"]},
-                {"$set": {"status": "running", "last_attempt_at": now},
-                 "$inc": {"attempts": 1}},
-            )
-            return existing["run_id"]
+        if not existing:
+            return None
+        await db.pipeline_runs.update_one(
+            {"run_id": existing["run_id"]},
+            {"$set": {"status": "running", "last_attempt_at": now},
+             "$inc": {"attempts": 1}},
+        )
+        return existing["run_id"]
+
+    if task_name and (run_id := await _join_existing()):
+        return run_id
 
     run = PipelineRun(repo_id=repo_id, commit_sha=after_sha)
     doc = run.dict()
-    doc.update({"task_name": task_name, "attempts": 1, "last_attempt_at": now})
-    await db.pipeline_runs.insert_one(doc)
+    doc.update({"attempts": 1, "last_attempt_at": now})
+    if task_name:
+        # Only set when present: the unique index covers string task names.
+        doc["task_name"] = task_name
+    try:
+        await db.pipeline_runs.insert_one(doc)
+    except DuplicateKeyError:
+        # Another attempt of the same task inserted it between our find and
+        # insert (the unique task_name index rejected ours); join that run.
+        if task_name and (run_id := await _join_existing()):
+            return run_id
+        raise
     return run.run_id
 
 
