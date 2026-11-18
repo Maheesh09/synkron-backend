@@ -1,7 +1,16 @@
 .env
+.env.*
+env.yaml
 .git
+.github
 .vscode
 __pycache__
 *.pyc
 venv
 scratch
+node_modules
+tests
+scripts
+.pytest_cache
+*.patch
+*.csv
