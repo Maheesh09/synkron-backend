@@ -199,6 +199,27 @@ gcloud tasks queues update synkron-pipeline-queue \
 
 This ensures one push always maps to exactly one pipeline attempt with no concurrent overlap.
 
+### Dev deployments (GitHub Actions)
+
+Every push to the `dev` branch runs [.github/workflows/deploy-dev.yml](.github/workflows/deploy-dev.yml):
+
+1. **Test**: installs `requirements-dev.txt` and runs `pytest`. A failing test stops the deploy.
+2. **Build**: builds the Docker image and pushes it to Artifact Registry, tagged with the commit SHA.
+3. **Deploy**: deploys the image to the `synkron-backend-dev` Cloud Run service. Secrets come from Secret Manager; nothing secret is stored in GitHub.
+4. **Smoke test**: calls `/health` on the new revision.
+
+Pushes to other branches never deploy. The workflow only runs on `dev`, the `dev` GitHub environment accepts deployments from `dev` only, and Google Cloud only trusts GitHub tokens issued for `refs/heads/dev` of this repo.
+
+**One-time setup** (needs owner access to the GCP project and `gh` logged in):
+
+```bash
+bash scripts/setup-dev-deploy.sh --env-file env.yaml
+```
+
+It creates the Artifact Registry repo, a deployer and a runtime service account, the Workload Identity Federation provider, the `synkron-dev-*` secrets (seeded from the env file), and the `dev` GitHub environment with its variables. It is safe to re-run. To rotate secrets after editing the env file, run it again with `--update-secrets`.
+
+Dev writes to the MongoDB database `synkron-dev` by default. Set `MONGODB_DB_NAME` on the `dev` environment to change it.
+
 ---
 
 ## API Reference

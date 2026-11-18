@@ -69,3 +69,11 @@ dmypy.json
 node_modules/
 npm-debug.log
 yarn-error.log
+
+
+backend-security-headers.patch
+fix_merge_flags.py
+metrics_report.py
+metrics_runs.csv
+
+scripts
