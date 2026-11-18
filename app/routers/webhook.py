@@ -9,7 +9,7 @@ from pymongo.errors import DuplicateKeyError
 from app.config import settings
 from app.services.cloud_tasks import enqueue_pipeline, enqueue_feedback
 from app.database import get_db
-from app.services.rate_limit import check_rate_limit, reserve_rate_limit_quota, release_rate_limit_quota
+from app.services.rate_limit import reserve_rate_limit_quota, release_rate_limit_quota
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -147,27 +147,23 @@ async def _handle_push(payload: dict, delivery_id: str = "") -> dict:
     if any("[synkron]" in c.get("message", "") for c in commits):
         return {"status": "ignored", "reason": "synkron-authored commit"}
 
+    # Reserve quota before enqueuing. The reservation is atomic, so it is also
+    # the limit check; keep its bucket key to release the same bucket later.
     installation_id = payload.get("installation", {}).get("id")
-    if installation_id and not await check_rate_limit(installation_id):
-        logger.warning(f"Rate limit exceeded for installation {installation_id}, dropping push")
-        return {"status": "rate_limited", "reason": "hourly run limit reached"}
-
-    # Reserve quota before enqueuing
-    quota_reserved = False
+    quota_key = None
     if installation_id:
-        if not await reserve_rate_limit_quota(installation_id):
-            logger.warning(f"Rate limit exceeded for installation {installation_id} during reservation, dropping push")
+        ok, quota_key = await reserve_rate_limit_quota(installation_id)
+        if not ok:
+            logger.warning(f"Rate limit exceeded for installation {installation_id}, dropping push")
             return {"status": "rate_limited", "reason": "hourly run limit reached"}
-        quota_reserved = True
 
     try:
         await _safe_enqueue(enqueue_pipeline(payload, delivery_id), delivery_id)
         logger.info(f"Queued pipeline for {repo['full_name']} @ {payload['after'][:8]}")
         return {"status": "accepted"}
     except HTTPException:
-        # Release quota if enqueue failed
-        if quota_reserved and installation_id:
-            await release_rate_limit_quota(installation_id)
+        # Enqueue failed: give the slot back to the bucket it came from.
+        await release_rate_limit_quota(quota_key)
         raise
 
 async def _handle_pull_request(payload: dict, delivery_id: str = "") -> dict:

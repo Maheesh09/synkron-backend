@@ -5,18 +5,48 @@ from app.agents.pr_creator   import PRCreatorAgent
 from app.services.github import GitHubClient
 from app.database import get_db
 from app.models.pipeline_run import PipelineRun
-import time, logging
-from datetime import datetime
+from app.services.errors import PipelineRetry, is_retryable
 from app.services.gemini import start_usage_tracking, get_usage
+from datetime import datetime
 import time, logging
 
 logger = logging.getLogger(__name__)
 
 
-async def run_pipeline(before_sha: str, after_sha: str, repo_id: int, payload: dict) -> dict:
-    db  = get_db()
+async def _start_run(db, repo_id: int, after_sha: str, task_name: str | None) -> str:
+    """Create the run record, or reuse it when Cloud Tasks retries the same
+    task, so one push maps to one run however many attempts it takes.
+    last_attempt_at lets the sweeper tell a stalled run from one still retrying."""
+    now = datetime.utcnow()
+    if task_name:
+        existing = await db.pipeline_runs.find_one({"task_name": task_name})
+        if existing:
+            await db.pipeline_runs.update_one(
+                {"run_id": existing["run_id"]},
+                {"$set": {"status": "running", "last_attempt_at": now},
+                 "$inc": {"attempts": 1}},
+            )
+            return existing["run_id"]
+
     run = PipelineRun(repo_id=repo_id, commit_sha=after_sha)
-    await db.pipeline_runs.insert_one(run.dict())
+    doc = run.dict()
+    doc.update({"task_name": task_name, "attempts": 1, "last_attempt_at": now})
+    await db.pipeline_runs.insert_one(doc)
+    return run.run_id
+
+
+async def run_pipeline(before_sha: str, after_sha: str, repo_id: int, payload: dict,
+                       task_name: str | None = None, final_attempt: bool = True) -> dict:
+    """
+    Run the agents for one push.
+
+    Retryable errors on a non-final attempt raise PipelineRetry (the endpoint
+    turns that into 503 so Cloud Tasks tries again) and leave the run open.
+    Anything else, or any error on the final attempt, marks the run failed and
+    returns {"status": "failed"} so the task is acknowledged.
+    """
+    db     = get_db()
+    run_id = await _start_run(db, repo_id, after_sha, task_name)
 
     repository = payload.get("repository", {})
     repo_full_name = repository.get("full_name", "")
@@ -37,26 +67,26 @@ async def run_pipeline(before_sha: str, after_sha: str, repo_id: int, payload: d
     t0 = time.perf_counter()
 
     try:
-        result = await _run_direct_agents(run.run_id, before_sha, after_sha, payload)
+        result = await _run_direct_agents(run_id, before_sha, after_sha, payload)
         duration = time.perf_counter() - t0
         usage = get_usage()
 
         doc_details = result.pop("doc_details", [])
         stage_ms = result.pop("stage_ms", {})
-        if doc_details:
-            await db.pipeline_run_details.insert_many([
-                {
-                    "run_id":     run.run_id,
+        # Upsert, not insert: a retried task may already have written these.
+        for d in doc_details:
+            await db.pipeline_run_details.update_one(
+                {"run_id": run_id, "doc_path": d["doc_path"]},
+                {"$set": {
                     "repo_id":    repo_id,
-                    "doc_path":   d["doc_path"],
                     "ai_written": d["updated_content"],
                     "merged":     None,      # set by the feedback loop
-                }
-                for d in doc_details
-            ])
+                }},
+                upsert=True,
+            )
 
         await db.pipeline_runs.update_one(
-            {"run_id": run.run_id},
+            {"run_id": run_id},
             {"$set": {
                 "status":           result.get("status", "completed"),
                 "skip_reason":      result.get("skip_reason"),
@@ -71,24 +101,32 @@ async def run_pipeline(before_sha: str, after_sha: str, repo_id: int, payload: d
             }}
         )
         logger.info(
-            f"[{run.run_id}] done in {duration:.1f}s stages={stage_ms} "
+            f"[{run_id}] done in {duration:.1f}s stages={stage_ms} "
             f"tokens={usage.get('total_tokens', 0)} cost=${usage.get('cost_usd', 0):.5f}"
         )
         return result
 
     except Exception as e:
         duration = time.perf_counter() - t0
-        logger.error(f"[{run.run_id}] Pipeline failed after {duration:.1f}s: {e}")
+        error = {"error_type": type(e).__name__, "error_message": str(e),
+                 "duration_seconds": round(duration, 3)}
+
+        if is_retryable(e) and not final_attempt:
+            logger.warning(f"[{run_id}] Retryable failure after {duration:.1f}s, "
+                           f"asking Cloud Tasks to retry: {e}")
+            # Keep the run open; record why this attempt failed.
+            await db.pipeline_runs.update_one(
+                {"run_id": run_id},
+                {"$set": {f"last_{k}": v for k, v in error.items()}},
+            )
+            raise PipelineRetry(e) from e
+
+        logger.error(f"[{run_id}] Pipeline failed after {duration:.1f}s: {e}")
         await db.pipeline_runs.update_one(
-            {"run_id": run.run_id},
-            {"$set": {
-                "status": "failed",
-                "error_type": type(e).__name__,
-                "error_message": str(e),
-                "duration_seconds": round(duration, 3),
-            }}
+            {"run_id": run_id},
+            {"$set": {"status": "failed", **error}},
         )
-        raise
+        return {"status": "failed", "error_type": error["error_type"], "mr_url": None}
 
 
 async def _run_direct_agents(run_id: str, before_sha: str, after_sha: str, payload: dict) -> dict:

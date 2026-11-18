@@ -188,16 +188,31 @@ gcloud run deploy synkron-backend \
   --env-vars-file env.yaml
 ```
 
-**5. Update the queue to prevent retry storms**
+**5. Configure retries on the queue**
 
 ```bash
 gcloud tasks queues update synkron-pipeline-queue \
   --location YOUR_REGION \
-  --max-attempts=1 \
+  --max-attempts=3 \
+  --min-backoff=30s \
+  --max-backoff=300s \
   --max-concurrent-dispatches=1
 ```
 
-This ensures one push always maps to exactly one pipeline attempt with no concurrent overlap.
+A transient failure (Gemini or GitHub 5xx/429, timeouts, MongoDB unreachable) gets up to 3 attempts with backoff. Permanent failures are recorded as `failed` and not retried, and every attempt of one push reuses the same run record. This is safe because the PR Creator is idempotent: it reuses the branch and finds the existing PR. Keep `--max-attempts` equal to the `PIPELINE_MAX_ATTEMPTS` setting (default `3`).
+
+**6. Sweep abandoned runs every 15 minutes**
+
+If an instance is stopped mid-run (timeout, out of memory, redeploy), the run would stay `running` forever. `POST /internal/sweep` marks runs with no progress for 15 minutes as `failed` (`error_type: Abandoned`):
+
+```bash
+gcloud scheduler jobs create http synkron-sweep \
+  --location YOUR_REGION \
+  --schedule "*/15 * * * *" \
+  --http-method POST \
+  --uri "https://YOUR_CLOUD_RUN_URL/internal/sweep" \
+  --headers "X-Internal-Token=YOUR_INTERNAL_SECRET"
+```
 
 ### Automatic deployments (GitHub Actions)
 

@@ -1,8 +1,21 @@
 from app.config import settings
-import json, logging, os
+import asyncio, json, logging, os
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# asyncio keeps only weak references to tasks, so a fire-and-forget task with
+# no other reference can be garbage-collected before it finishes. Hold them
+# here until they complete (LOCAL_DEV path only).
+_background: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+    return task
+
 
 _client = None
 def _get_client():
@@ -77,7 +90,7 @@ async def enqueue_pipeline(payload: dict, delivery_id: str = ""):
             logger.error("Missing repository.id in GitHub payload")
             return
 
-        asyncio.create_task(
+        _spawn(
             run_pipeline(
                 before_sha=payload.get("before"),
                 after_sha=payload.get("after"),
@@ -99,7 +112,7 @@ async def enqueue_feedback(payload: dict, delivery_id: str = ""):
         import asyncio
         from app.services.feedback import process_feedback
         logger.info("[LOCAL] Executing feedback process directly in background task")
-        asyncio.create_task(process_feedback(payload))
+        _spawn(process_feedback(payload))
         return
     # Use delivery_id as Cloud Task name for built-in deduplication (~1 hour window).
     # Task names must be alphanumeric + hyphens, so prefix the delivery ID (which is a UUID).

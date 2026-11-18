@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, HTTPException
 from app.database import get_db
 from app.auth import get_current_github_id
 
@@ -27,12 +27,20 @@ async def get_recent_runs(
 
 
 @router.get("/health")
-async def get_health_stats(github_id: int = Depends(get_current_github_id)):
+async def get_health_stats(
+    repo_id: int | None = Query(None, description="Limit stats to one of the user's repos"),
+    github_id: int = Depends(get_current_github_id),
+):
+    """Aggregate stats over ALL of the user's runs (or one repo's), not a page of them."""
     db = get_db()
     repo_ids = await _user_repo_ids(db, github_id)
+    if repo_id is not None:
+        if repo_id not in repo_ids:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        repo_ids = [repo_id]
     if not repo_ids:
         return {
-            "total_runs": 0, "completed_runs": 0, "skipped_runs": 0,
+            "total_runs": 0, "completed_runs": 0, "skipped_runs": 0, "failed_runs": 0,
             "success_rate": 0, "avg_duration": 0, "docs_updated": 0,
         }
 
@@ -40,6 +48,10 @@ async def get_health_stats(github_id: int = Depends(get_current_github_id)):
     total     = await db.pipeline_runs.count_documents(scope)
     completed = await db.pipeline_runs.count_documents({**scope, "status": "completed"})
     skipped   = await db.pipeline_runs.count_documents({**scope, "status": "skipped"})
+    failed    = await db.pipeline_runs.count_documents({**scope, "status": "failed"})
+    # Skipped runs (nothing to document) say nothing about success; the
+    # dashboard uses the same definition.
+    decisive  = completed + failed
 
     dur_agg = await db.pipeline_runs.aggregate([
         {"$match": {**scope, "status": "completed", "duration_seconds": {"$exists": True}}},
@@ -77,7 +89,8 @@ async def get_health_stats(github_id: int = Depends(get_current_github_id)):
         "total_runs":     total,
         "completed_runs": completed,
         "skipped_runs":   skipped,
-        "success_rate":   round(completed / total * 100, 1) if total > 0 else 0,
+        "failed_runs":    failed,
+        "success_rate":   round(completed / decisive * 100, 1) if decisive > 0 else 0,
         "avg_duration":   avg_duration,
         "docs_updated":   docs_updated,
         "p50_duration":   p50,

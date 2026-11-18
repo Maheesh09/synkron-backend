@@ -161,3 +161,22 @@ async def app_request(method: str, path: str, **kwargs) -> httpx.Response:
         resp = await client.request(method, f"{API_BASE}{path}", headers=headers, **kwargs)
         resp.raise_for_status()
         return resp
+
+
+_bot_login: str | None = None
+
+
+async def get_app_bot_login() -> str:
+    """
+    The login GitHub shows on commits made by this App, e.g. "synkron-docs[bot]".
+
+    Uses GITHUB_APP_BOT_LOGIN when set; otherwise asks GitHub for the App's
+    slug once (GET /app) and caches "<slug>[bot]" for the life of the process.
+    """
+    global _bot_login
+    if settings.GITHUB_APP_BOT_LOGIN:
+        return settings.GITHUB_APP_BOT_LOGIN
+    if _bot_login is None:
+        slug = (await app_request("GET", "/app")).json()["slug"]
+        _bot_login = f"{slug}[bot]"
+    return _bot_login

@@ -50,6 +50,7 @@ async def connect_db():
         (db.pipeline_runs, [("repo_id", 1), ("created_at", -1)], {}),
         (db.pipeline_runs, [("mr_id", 1)], {}),
         (db.correction_patterns, [("repo_id", 1), ("doc_type", 1), ("created_at", -1)], {}),
+        (db.correction_patterns, [("repo_key", 1), ("doc_type", 1), ("created_at", -1)], {}),
         (db.repositories, [("repo_id", 1)], {"unique": True}),
         (db.pipeline_run_details, [("run_id", 1), ("doc_path", 1)], {"unique": True}),
         (db.repositories, [("webhook_token_hash", 1)], {}),

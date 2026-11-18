@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     GITHUB_APP_ID: str = ""
     GITHUB_APP_PRIVATE_KEY: str = ""
     GITHUB_WEBHOOK_SECRET: str = ""
+    # Commit author login of this App, e.g. "synkron-docs[bot]". Optional:
+    # looked up from GitHub (GET /app) when empty.
+    GITHUB_APP_BOT_LOGIN: str = ""
     GOOGLE_CLOUD_PROJECT: str = ""
     GCP_REGION: str = "asia-south1"
 
@@ -29,6 +32,10 @@ class Settings(BaseSettings):
     CORS_ALLOWED_ORIGINS: str = ""
 
     RATE_LIMIT_PER_HOUR: int = 20
+
+    # Must match the Cloud Tasks queue's --max-attempts. On the last attempt a
+    # retryable error is recorded as a failure instead of asking for a retry.
+    PIPELINE_MAX_ATTEMPTS: int = 3
 
     class Config:
         env_file = ".env"

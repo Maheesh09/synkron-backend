@@ -13,76 +13,50 @@ from app.database import get_db
 logger = logging.getLogger(__name__)
 
 
-async def check_rate_limit(installation_id: int) -> bool:
+def _bucket_key(installation_id: int) -> str:
+    return f"{installation_id}:{int(time.time()) // 3600}"   # current hour bucket
+
+
+async def reserve_rate_limit_quota(installation_id: int) -> tuple[bool, str | None]:
     """
-    True if this installation is within its hourly run budget, False if it has
-    exceeded it. Does NOT increment the counter; use reserve_rate_limit_quota
-    to actually reserve a slot. Fails open (returns True) if the datastore is
-    unavailable, so a Mongo blip never blocks legitimate runs.
+    Atomically reserve one run for this installation in the current hour.
+
+    Returns (ok, key). Pass `key` to release_rate_limit_quota if the run is
+    not enqueued after all, so the release hits the same hour bucket even if
+    the clock has rolled over in between. key is None when there is nothing to
+    release (limit disabled, limit exceeded, or datastore unavailable).
+    Fails open, so a Mongo blip never blocks legitimate runs.
     """
     limit = settings.RATE_LIMIT_PER_HOUR
     if limit <= 0:
-        return True  # disabled
+        return True, None  # disabled
 
-    window = int(time.time()) // 3600           # current hour bucket
-    key = f"{installation_id}:{window}"
+    key = _bucket_key(installation_id)
     try:
-        doc = await get_db().rate_limits.find_one({"_id": key})
-        if doc is None:
-            return True
-        return doc["count"] < limit
-    except Exception as e:
-        logger.warning(f"Rate limit check failed for installation {installation_id}, allowing: {e}")
-        return True
-
-async def reserve_rate_limit_quota(installation_id: int) -> bool:
-    """
-    Reserve a quota slot for this installation. Returns True if quota was
-    successfully reserved, False if the limit has been exceeded. Should be called
-    after check_rate_limit and only when task creation will definitely proceed.
-    """
-    limit = settings.RATE_LIMIT_PER_HOUR
-    if limit <= 0:
-        return True  # disabled
-
-    window = int(time.time()) // 3600           # current hour bucket
-    key = f"{installation_id}:{window}"
-    try:
-        doc = await get_db().rate_limits.find_one_and_update(
+        coll = get_db().rate_limits
+        doc = await coll.find_one_and_update(
             {"_id": key},
             {"$inc": {"count": 1},
              "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
             upsert=True,
             return_document=ReturnDocument.AFTER,
         )
-        return doc["count"] <= limit
+        if doc["count"] <= limit:
+            return True, key
+        # Over the limit: undo our increment so the counter stays accurate.
+        await coll.update_one({"_id": key}, {"$inc": {"count": -1}})
+        return False, None
     except Exception as e:
         logger.warning(f"Rate limit reservation failed for installation {installation_id}, allowing: {e}")
-        return True
+        return True, None
 
-async def release_rate_limit_quota(installation_id: int):
-    """
-    Release a previously reserved quota slot. Should be called if task creation
-    fails after quota was reserved.
-    """
-    limit = settings.RATE_LIMIT_PER_HOUR
-    if limit <= 0:
-        return  # disabled
 
-    window = int(time.time()) // 3600           # current hour bucket
-    key = f"{installation_id}:{window}"
+async def release_rate_limit_quota(key: str | None) -> None:
+    """Give back a slot taken by reserve_rate_limit_quota (e.g. enqueue failed)."""
+    if not key:
+        return
     try:
-        await get_db().rate_limits.update_one(
-            {"_id": key},
-            {"$inc": {"count": -1}},
-        )
-        logger.info(f"Released rate limit quota for installation {installation_id}")
+        await get_db().rate_limits.update_one({"_id": key}, {"$inc": {"count": -1}})
+        logger.info(f"Released rate limit quota for bucket {key}")
     except Exception as e:
-        logger.warning(f"Failed to release rate limit quota for installation {installation_id}: {e}")
-
-async def within_rate_limit(installation_id: int) -> bool:
-    """
-    DEPRECATED: Use check_rate_limit() and reserve_rate_limit_quota() separately.
-    This function increments immediately and is kept for backward compatibility.
-    """
-    return await reserve_rate_limit_quota(installation_id)
+        logger.warning(f"Failed to release rate limit quota for bucket {key}: {e}")

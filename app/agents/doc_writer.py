@@ -1,6 +1,7 @@
 from app.services.github import GitHubClient
 from app.services.gemini import call_gemini
 from app.database import get_db
+from app.services.doc_types import classify_doc
 from typing import List
 import logging
 
@@ -27,15 +28,15 @@ class DocWriterAgent:
 
     async def _rewrite_doc(self, doc: dict):
         current  = await self.client.get_file_content(doc["path"])
-        doc_type = self._classify_doc(doc["path"])
+        doc_type = classify_doc(doc["path"])
 
-        # Pull past correction examples from MongoDB (feedback loop)
-        # Query by the stable string key (owner/repo) that we now store in repo_key field.
-        # For backward compatibility, we also check the legacy numeric repo_id field.
+        # Pull past correction examples from MongoDB (feedback loop), keyed by
+        # the stable "owner/repo" string. Covered by the
+        # (repo_key, doc_type, created_at) index created in database.py.
         repo_key = f"{self.client.owner}/{self.client.repo}"
         db       = get_db()
         examples = await db.correction_patterns.find(
-            {"$or": [{"repo_key": repo_key}, {"repo_id": repo_key}], "doc_type": doc_type}
+            {"repo_key": repo_key, "doc_type": doc_type}
         ).sort("created_at", -1).limit(2).to_list(length=2)
 
         few_shot = ""
@@ -78,14 +79,3 @@ Return ONLY the complete markdown file content. No explanation, no backticks."""
             "explanation":      doc.get("reason", ""),
             "doc_type":         doc_type
         }
-
-    def _classify_doc(self, path: str) -> str:
-        p = path.lower()
-        if "readme" in p:   return "readme"
-        if "api" in p:      return "api_reference"
-        if "auth" in p:     return "authentication"
-        if "config" in p:   return "configuration"
-        if "guide" in p:    return "guide"
-        if "deploy" in p:   return "deployment"
-        if "change" in p:   return "changelog"
-        return "general"
