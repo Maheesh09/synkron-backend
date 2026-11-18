@@ -60,3 +60,22 @@ async def test_bot_login_uses_setting_or_cached_app_slug(monkeypatch):
     assert await github_auth.get_app_bot_login() == "synkron-docs[bot]"
     assert await github_auth.get_app_bot_login() == "synkron-docs[bot]"
     app_request.assert_awaited_once()   # looked up once, then cached
+
+
+@pytest.mark.asyncio
+async def test_no_description_generated_when_pr_already_exists():
+    agent, client = _agent(BOT)
+    await agent.run()
+    pr_creator.call_gemini.assert_not_called()
+    client.create_pull_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_description_generated_for_a_new_pr():
+    agent, client = _agent(BOT)
+    client.find_pull_request = AsyncMock(return_value=None)
+    client.create_pull_request = AsyncMock(
+        return_value={"url": "https://github.com/acme/w/pull/6", "number": 6})
+    await agent.run()
+    pr_creator.call_gemini.assert_awaited_once()
+    assert client.create_pull_request.await_args.kwargs["body"] == "desc"
